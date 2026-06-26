@@ -1,5 +1,7 @@
 #import "SCProxyManager.h"
 #import "SCSpoofConfig.h"
+
+static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 #import "SCSpoofConfig.h"
 #import <sys/un.h>
 #import <sys/socket.h>

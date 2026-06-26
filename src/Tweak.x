@@ -45,9 +45,8 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
     SCApplyProxyIfNeeded();
 }
 
-%ctor {
+static void SCBootstrap(void) {
     @autoreleasepool {
-        %init(_ungrouped);
         // trigger load config
         [SCSpoofConfig shared];
         SCApplyProxyIfNeeded();
@@ -493,4 +492,9 @@ static int sc_uname(struct utsname *buf) {
 
 %ctor {
     MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
+}
+
+%ctor {
+    %init(_ungrouped);
+    SCBootstrap();
 }

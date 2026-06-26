@@ -25,6 +25,8 @@
 #import <sys/socket.h>
 #import <sys/un.h>
 #import <sys/ioctl.h>
+#import <sys/stat.h>
+#import <sys/wait.h>
 #import <net/if.h>
 #import <fcntl.h>
 #import <unistd.h>
@@ -35,6 +37,9 @@
 #import <signal.h>
 #import <dispatch/dispatch.h>
 #import <string.h>
+#import <spawn.h>
+
+extern char **environ;
 
 #define SC_DIVERT_PORT  7773
 #define SC_DOH_PORT     5353
@@ -149,6 +154,22 @@ static void sc_log(NSString *fmt, ...) {
     NSLog(@"[scproxyd] %@", msg);
 }
 
+static const char *sc_pfctl_path(void) {
+    if (access("/var/jb/sbin/pfctl", X_OK) == 0) return "/var/jb/sbin/pfctl";
+    if (access("/sbin/pfctl", X_OK) == 0) return "/sbin/pfctl";
+    return "/sbin/pfctl";
+}
+
+static int sc_spawn_wait(const char *path, char *const argv[]) {
+    pid_t pid = 0;
+    int status = 127;
+    int rc = posix_spawn(&pid, path, NULL, NULL, argv, environ);
+    if (rc != 0) return rc;
+    if (waitpid(pid, &status, 0) < 0) return errno;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    return status;
+}
+
 // ---------------------------------------------------------------------------
 //  PF rules - load/clear anchor
 //  Divert TCP outbound (non-loopback, non-local) vào divert port.
@@ -192,14 +213,21 @@ static BOOL sc_pf_load(void) {
     NSString *rules = sc_pf_rules();
     NSString *tmp = @"/tmp/scproxy_pf.conf";
     [rules writeToFile:tmp atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    int rc = system([[NSString stringWithFormat:@"pfctl -a %s -f %@ 2>/dev/null", SC_PF_ANCHOR, tmp] UTF8String]);
-    system("pfctl -e 2>/dev/null");
+    char anchor[128];
+    snprintf(anchor, sizeof(anchor), "%s", SC_PF_ANCHOR);
+    char *loadArgs[] = { (char *)sc_pfctl_path(), "-a", anchor, "-f", (char *)[tmp fileSystemRepresentation], NULL };
+    int rc = sc_spawn_wait(loadArgs[0], loadArgs);
+    char *enableArgs[] = { (char *)sc_pfctl_path(), "-e", NULL };
+    sc_spawn_wait(enableArgs[0], enableArgs);
     sc_log(@"PF rules loaded (rc=%d)", rc);
     return rc == 0;
 }
 
 static BOOL sc_pf_clear(void) {
-    int rc = system([[NSString stringWithFormat:@"pfctl -a %s -F all 2>/dev/null", SC_PF_ANCHOR] UTF8String]);
+    char anchor[128];
+    snprintf(anchor, sizeof(anchor), "%s", SC_PF_ANCHOR);
+    char *args[] = { (char *)sc_pfctl_path(), "-a", anchor, "-F", "all", NULL };
+    int rc = sc_spawn_wait(args[0], args);
     sc_log(@"PF rules cleared (rc=%d)", rc);
     return rc == 0;
 }
@@ -672,9 +700,16 @@ static NSData *sc_doh_query(NSData *query) {
     [req setValue:@"application/dns-message" forHTTPHeaderField:@"Accept"];
     [req setHTTPMethod:@"GET"];
     [req setTimeoutInterval:5];
-    NSURLResponse *resp = nil;
-    NSError *err = nil;
-    NSData *data = [NSURLConnection sendSynchronousRequest:req returningResponse:&resp error:&err];
+    __block NSData *data = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req
+                                                                 completionHandler:^(NSData *d, NSURLResponse *response, NSError *error) {
+        (void)response;
+        if (!error) data = d;
+        dispatch_semaphore_signal(sem);
+    }];
+    [task resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     return data;
 }
 
@@ -859,10 +894,7 @@ int main(int argc, char **argv) {
         }
         sc_log(@"scproxyd starting (pid=%d)", getpid());
 
-        // daemonize
-        if (daemon(0, 0) < 0) {
-            sc_log(@"daemon() failed: %s", strerror(errno));
-        }
+        // launchd already runs this as a daemon; do not call daemon() on iOS.
         signal(SIGPIPE, SIG_IGN);
         signal(SIGTERM, sc_sigterm);
 

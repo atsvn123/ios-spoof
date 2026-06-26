@@ -222,9 +222,10 @@ static CLLocation *sc_make_location() {
     if (SC_GEO_ON()) {
         // Thay location bằng spoof trước khi gọi
         CLLocation *fake = sc_make_location();
-        %orig(fake, ^(NSArray<CLPlacemark *> *placemarks, NSError *error) {
-            handler(placemarks, error);
-        });
+        CLGeocodeCompletionHandler wrapped = ^(NSArray *placemarks, NSError *error) {
+            if (handler) handler(placemarks, error);
+        };
+        %orig(fake, wrapped);
         return;
     }
     %orig;

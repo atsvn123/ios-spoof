@@ -6,7 +6,10 @@
 #import <sys/un.h>
 #import <arpa/inet.h>
 #import <string.h>
+#import <spawn.h>
 #import "../src/SCDevicePresets.h"
+
+extern char **environ;
 
 #define PREFS_PATH @"/var/mobile/Library/Preferences/com.iosspoof.tweak.plist"
 #define PREFS_PATH_RL @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist"
@@ -49,10 +52,6 @@
     [m writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
         CFSTR("com.iosspoof.tweak.prefs-changed"), NULL, NULL, TRUE);
-}
-
-- (void)specifiersLoaded {
-    [super specifiersLoaded];
 }
 
 // ---- Actions ----
@@ -170,7 +169,10 @@
     UIAlertController *a = [UIAlertController alertControllerWithTitle:@"iOSSpoof"
         message:@"Đã áp dụng. Respring để生效?" preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"Respring" style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
-        system("killall -9 SpringBoard");
+        pid_t pid;
+        const char *killall = access("/var/jb/usr/bin/killall", X_OK) == 0 ? "/var/jb/usr/bin/killall" : "/usr/bin/killall";
+        const char *argv[] = { killall, "-9", "SpringBoard", NULL };
+        posix_spawn(&pid, argv[0], NULL, NULL, (char * const *)argv, environ);
     }]];
     [a addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:a animated:YES completion:nil];

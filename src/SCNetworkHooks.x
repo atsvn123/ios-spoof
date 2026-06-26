@@ -270,12 +270,18 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
         }
         void *sc = dlopen("/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration", RTLD_NOW);
         if (sc) {
-            MSHookFunction((void *)&SCDynamicStoreCopyValue,
-                           (void *)sc_SCDynamicStoreCopyValue,
-                           (void **)&orig_SCDynamicStoreCopyValue);
-            MSHookFunction((void *)&SCDynamicStoreCopyKeyList,
-                           (void *)sc_SCDynamicStoreCopyKeyList,
-                           (void **)&orig_SCDynamicStoreCopyKeyList);
+            void *copyValue = dlsym(sc, "SCDynamicStoreCopyValue");
+            if (copyValue) {
+                MSHookFunction(copyValue,
+                               (void *)sc_SCDynamicStoreCopyValue,
+                               (void **)&orig_SCDynamicStoreCopyValue);
+            }
+            void *copyKeyList = dlsym(sc, "SCDynamicStoreCopyKeyList");
+            if (copyKeyList) {
+                MSHookFunction(copyKeyList,
+                               (void *)sc_SCDynamicStoreCopyKeyList,
+                               (void **)&orig_SCDynamicStoreCopyKeyList);
+            }
             MSHookFunction((void *)&SCNetworkReachabilityGetFlags,
                            (void *)sc_SCNetworkReachabilityGetFlags,
                            (void **)&orig_SCNetworkReachabilityGetFlags);

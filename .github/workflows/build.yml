@@ -22,7 +22,18 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer 2>/dev/null || true
           xcode-select -p
 
+      - name: Cache Theos
+        id: cache-theos
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/theos
+          key: theos-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            theos-${{ runner.os }}-
+
       - name: Install Theos
+        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           brew install ldid make perl
           mkdir -p ~/theos

@@ -1,7 +1,6 @@
 #import "SCSpoofConfig.h"
 #import "SCDevicePresets.h"
 #import <objc/runtime.h>
-#import <CoreTelephony/CoreTelephony.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #import <CFNetwork/CFNetwork.h>
 #import <netinet/in.h>
@@ -12,6 +11,25 @@
 #import <dlfcn.h>
 #import <substrate.h>
 #import <string.h>
+
+// iOS 17 SDKs used by CI may not expose CoreTelephony headers. We only need
+// Objective-C selectors for Logos hooks, so forward declarations are enough.
+@class CTCarrier;
+
+@interface CTCarrier : NSObject
+- (NSString *)carrierName;
+- (NSString *)mobileCountryCode;
+- (NSString *)mobileNetworkCode;
+- (NSString *)isoCountryCode;
+- (BOOL)allowsVOIP;
+@end
+
+@interface CTTelephonyNetworkInfo : NSObject
+- (NSDictionary<NSString *, CTCarrier *> *)serviceSubscriberCellularProviders;
+- (NSString *)serviceSubscriberCellularProvidersDidUpdateNotifier;
+- (NSString *)currentRadioAccessTechnology;
+- (NSDictionary<NSString *, NSString *> *)serviceCurrentRadioAccessTechnology;
+@end
 
 // ============================================================================
 //  SCNetworkHooks.x

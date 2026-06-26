@@ -12,6 +12,7 @@
 #import <fcntl.h>
 #import <unistd.h>
 #import <errno.h>
+#import <string.h>
 #import <substrate.h>
 #import <IOKit/IOKitLib.h>
 
@@ -52,7 +53,7 @@ static void SCBootstrap(void) {
         SCApplyProxyIfNeeded();
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
             NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs-changed"), NULL,
-            CFNotificationSuspensionBehaviorCoalescing);
+            CFNotificationSuspensionBehaviorCoalesce);
         if ([[NSUserDefaults standardUserDefaults] boolForKey:@"iOSSpoofDebugLog"]) {
             NSLog(@"[iOSSpoof] loaded into %@ (preset=%@)", CFG().currentBundleID, P().productType);
         }

@@ -11,6 +11,7 @@
 #import <sys/ioctl.h>
 #import <dlfcn.h>
 #import <substrate.h>
+#import <string.h>
 
 // ============================================================================
 //  SCNetworkHooks.x

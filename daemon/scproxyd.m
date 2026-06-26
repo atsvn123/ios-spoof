@@ -34,6 +34,7 @@
 #import <pthread.h>
 #import <signal.h>
 #import <dispatch/dispatch.h>
+#import <string.h>
 
 #define SC_DIVERT_PORT  7773
 #define SC_DOH_PORT     5353

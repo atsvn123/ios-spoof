@@ -32,10 +32,12 @@ jobs:
           restore-keys: |
             theos-${{ runner.os }}-
 
+      - name: Install build tools
+        run: brew install ldid make perl
+
       - name: Install Theos
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
-          brew install ldid make perl
           mkdir -p ~/theos
           git clone --recursive https://github.com/theos/theos.git ~/theos
           # Install SDKs

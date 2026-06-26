@@ -26,7 +26,6 @@
 #import <sys/un.h>
 #import <sys/ioctl.h>
 #import <net/if.h>
-#import <net/pfvar.h>
 #import <fcntl.h>
 #import <unistd.h>
 #import <errno.h>
@@ -34,6 +33,7 @@
 #import <netdb.h>
 #import <pthread.h>
 #import <signal.h>
+#import <dispatch/dispatch.h>
 
 #define SC_DIVERT_PORT  7773
 #define SC_DOH_PORT     5353
@@ -62,6 +62,7 @@ typedef struct {
 } sc_state_t;
 
 static sc_state_t g_state;
+static void sc_sigterm(int sig);
 
 // ---------------------------------------------------------------------------
 //  NAT table entry
@@ -91,9 +92,10 @@ static pthread_mutex_t g_nat_lock = PTHREAD_MUTEX_INITIALIZER;
 static sc_nat_t *sc_nat_find(uint32_t sip, uint16_t sport, uint32_t dip, uint16_t dport) {
     pthread_mutex_lock(&g_nat_lock);
     for (int i = 0; i < SC_NAT_MAX; i++) {
-        if (g_nat[i].upstream_fd >= 0 &&
+        if (g_nat[i].upstream_fd != -1 &&
             g_nat[i].src_ip == sip && g_nat[i].src_port == sport &&
-            g_nat[i].dst_ip == dip && g_nat[i].dst_port == dport) {
+            (dip == 0 || g_nat[i].dst_ip == dip) &&
+            (dport == 0 || g_nat[i].dst_port == dport)) {
             g_nat[i].last_active = time(NULL);
             pthread_mutex_unlock(&g_nat_lock);
             return &g_nat[i];
@@ -153,10 +155,25 @@ static void sc_log(NSString *fmt, ...) {
 // ---------------------------------------------------------------------------
 
 static NSString *sc_pf_rules(void) {
+    NSString *dstExclude = @"127.0.0.0/8";
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char proxyPort[16];
+    snprintf(proxyPort, sizeof(proxyPort), "%u", g_state.port);
+    if (g_state.host[0] && getaddrinfo(g_state.host, proxyPort, &hints, &res) == 0 && res) {
+        char ip[INET_ADDRSTRLEN] = {0};
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
+        dstExclude = [NSString stringWithFormat:@"{ 127.0.0.0/8, %s }", ip];
+        freeaddrinfo(res);
+    }
+
     return [NSString stringWithFormat:
         @"# iOSSpoof transparent proxy anchor\n"
         @"# rdr TCP outbound (except local) vào divert port\n"
-        @"rdr pass inet proto tcp from any to !127.0.0.0/8 port 1:65535 -> 127.0.0.1 port %d\n"
+        @"rdr pass inet proto tcp from any to ! %@ port 1:65535 -> 127.0.0.1 port %d\n"
         @"# DNS: redirect UDP/53 to local DoH resolver\n"
         @"rdr pass inet proto udp from any to any port 53 -> 127.0.0.1 port %d\n"
         @"rdr pass inet proto tcp from any to any port 53 -> 127.0.0.1 port %d\n"
@@ -164,6 +181,7 @@ static NSString *sc_pf_rules(void) {
         @"pass out quick inet proto tcp from 127.0.0.1 port %d to any\n"
         @"pass out quick inet proto tcp from any to 127.0.0.1 port %d\n"
         @"pass out quick inet proto udp from 127.0.0.1 port %d to any\n",
+        dstExclude,
         SC_DIVERT_PORT,
         SC_DOH_PORT, SC_DOH_PORT,
         SC_DIVERT_PORT, SC_DIVERT_PORT, SC_DOH_PORT];
@@ -775,13 +793,14 @@ static void sc_control_loop(void) {
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strlcpy(addr.sun_path, SC_CTL_SOCK, sizeof(addr.sun_path));
+    const char *preferredSock = (access("/var/jb/var/run", F_OK) == 0) ? SC_CTL_SOCK_RL : SC_CTL_SOCK;
+    const char *fallbackSock = (strcmp(preferredSock, SC_CTL_SOCK_RL) == 0) ? SC_CTL_SOCK : SC_CTL_SOCK_RL;
+    strlcpy(addr.sun_path, preferredSock, sizeof(addr.sun_path));
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         sc_log(@"control bind failed: %s", strerror(errno));
-        // try rootless path
-        strlcpy(addr.sun_path, SC_CTL_SOCK_RL, sizeof(addr.sun_path));
+        strlcpy(addr.sun_path, fallbackSock, sizeof(addr.sun_path));
         if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-            sc_log(@"control bind (rootless) failed: %s", strerror(errno));
+            sc_log(@"control bind fallback failed: %s", strerror(errno));
             close(fd);
             return;
         }
@@ -844,18 +863,20 @@ int main(int argc, char **argv) {
             sc_log(@"daemon() failed: %s", strerror(errno));
         }
         signal(SIGPIPE, SIG_IGN);
-        signal(SIGTERM, ^(int sig) {
-            sc_log(@"SIGTERM received, shutting down");
-            g_state.running = NO;
-            sc_pf_clear();
-            if (g_state.divert_fd >= 0) close(g_state.divert_fd);
-            if (g_state.udp_fd >= 0) close(g_state.udp_fd);
-            if (g_state.doh_fd >= 0) close(g_state.doh_fd);
-            if (g_state.ctl_fd >= 0) close(g_state.ctl_fd);
-            exit(0);
-        });
+        signal(SIGTERM, sc_sigterm);
 
         sc_control_loop();
     }
     return 0;
+}
+
+static void sc_sigterm(int sig) {
+    (void)sig;
+    g_state.running = NO;
+    sc_pf_clear();
+    if (g_state.divert_fd >= 0) close(g_state.divert_fd);
+    if (g_state.udp_fd >= 0) close(g_state.udp_fd);
+    if (g_state.doh_fd >= 0) close(g_state.doh_fd);
+    if (g_state.ctl_fd >= 0) close(g_state.ctl_fd);
+    exit(0);
 }

@@ -3,6 +3,7 @@
 NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDidChange";
 
 #define SC_READ_BOOL(k)        [d objectForKey:k] ? [[d objectForKey:k] boolValue] : NO
+#define SC_READ_BOOL_DEF(k, v) [d objectForKey:k] ? [[d objectForKey:k] boolValue] : (v)
 #define SC_READ_STR(k)         [d objectForKey:k] ? [[d objectForKey:k] stringValue] : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
@@ -34,11 +35,12 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 }
 
 - (NSString *)prefsPath {
-    // Rootless: /var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist
-    // Rootful:  /var/mobile/Library/Preferences/...
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES);
-    NSString *lib = paths.firstObject ?: @"/var/mobile/Library";
-    return [lib stringByAppendingPathComponent:@"Preferences/com.iosspoof.tweak.plist"];
+    // Injected apps are sandboxed, so NSUserDomain paths point to the app container.
+    // Preferences must be read from the global mobile domain instead.
+    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb/var/mobile/Library/Preferences"]) {
+        return @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist";
+    }
+    return @"/var/mobile/Library/Preferences/com.iosspoof.tweak.plist";
 }
 
 - (void)reload {
@@ -68,12 +70,12 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _proxyUser = SC_READ_STR(@"proxyUser");
     _proxyPass = SC_READ_STR(@"proxyPass");
     _proxyUDP = SC_READ_BOOL(@"proxyUDP");
-    _hideProxy = SC_READ_BOOL(@"hideProxy");
-    _hideVPN = SC_READ_BOOL(@"hideVPN");
-    _hideJailbreak = SC_READ_BOOL(@"hideJailbreak");
-    _spoofIDFA = SC_READ_BOOL(@"spoofIDFA");
-    _spoofIDFV = SC_READ_BOOL(@"spoofIDFV");
-    _spoofBattery = SC_READ_BOOL(@"spoofBattery");
+    _hideProxy = SC_READ_BOOL_DEF(@"hideProxy", YES);
+    _hideVPN = SC_READ_BOOL_DEF(@"hideVPN", YES);
+    _hideJailbreak = SC_READ_BOOL_DEF(@"hideJailbreak", YES);
+    _spoofIDFA = SC_READ_BOOL_DEF(@"spoofIDFA", YES);
+    _spoofIDFV = SC_READ_BOOL_DEF(@"spoofIDFV", YES);
+    _spoofBattery = SC_READ_BOOL_DEF(@"spoofBattery", YES);
 
     [self resolvePreset];
     [self ensureSpoofedIds];
@@ -118,9 +120,19 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 }
 
 - (void)ensureSpoofedIds {
+    _udid = nil;
+    _serial = nil;
+    _ecid = nil;
+    _imei = nil;
+    _mac = nil;
+    _idfa = nil;
     // UDID 40 hex, có thể persist theo bundle trong prefs để stable
     NSString *idsPath = [[self prefsPath] stringByDeletingLastPathComponent];
     idsPath = [idsPath stringByAppendingPathComponent:@"com.iosspoof.tweak.ids.plist"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:[idsPath stringByDeletingLastPathComponent]
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
     NSMutableDictionary *ids = [NSMutableDictionary dictionaryWithContentsOfFile:idsPath] ?: [NSMutableDictionary dictionary];
     NSString *key = _bundleID;
     NSDictionary *per = ids[key];

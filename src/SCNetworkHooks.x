@@ -9,6 +9,8 @@
 #import <net/if.h>
 #import <netdb.h>
 #import <sys/ioctl.h>
+#import <dlfcn.h>
+#import <substrate.h>
 
 // ============================================================================
 //  SCNetworkHooks.x
@@ -92,6 +94,7 @@ CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
     CFDictionaryRef r = orig_CFNetworkCopySystemProxySettings();
     if (SC_ON() && CFG().hideProxy) {
         // Trả về dict rỗng (no proxy) để app không thấy HTTP proxy
+        if (r) CFRelease(r);
         return CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
     }
     return r;
@@ -112,7 +115,7 @@ CFArrayRef sc_CFNetworkCopyProxiesForURL(CFURLRef url, CFDictionaryRef settings)
 
 CFPropertyListRef (*orig_SCDynamicStoreCopyValue)(SCDynamicStoreRef, CFStringRef);
 CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key) {
-    if (SC_ON() && CFG().hideProxy) {
+    if (SC_ON() && CFG().hideProxy && key) {
         NSString *k = (__bridge NSString *)key;
         // ẩn HTTP proxy, HTTPS proxy, SOCKS, auto proxy
         if ([k containsString:@"Proxy"] || [k containsString:@"proxy"] ||
@@ -132,7 +135,7 @@ CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRe
 CFArrayRef (*orig_SCDynamicStoreCopyKeyList)(SCDynamicStoreRef, CFStringRef);
 CFArrayRef sc_SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef pattern) {
     CFArrayRef r = orig_SCDynamicStoreCopyKeyList(store, pattern);
-    if (SC_ON() && CFG().hideProxy && r) {
+    if (SC_ON() && CFG().hideProxy && r && pattern) {
         NSString *p = (__bridge NSString *)pattern;
         if ([p containsString:@"Proxy"] || [p containsString:@"proxy"]) {
             CFRelease(r);
@@ -160,8 +163,6 @@ int sc_getifaddrs(struct ifaddrs **ifap) {
     // Danh sách prefix interface cần ẩn
     NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif",
                               @"stf", @"bridge"];
-    // Link chain filter
-    struct ifaddrs **pp = ifap;
     struct ifaddrs *cur = *ifap;
     while (cur) {
         char *name = cur->ifa_name;
@@ -171,14 +172,11 @@ int sc_getifaddrs(struct ifaddrs **ifap) {
             if ([n hasPrefix:pre]) { hide = YES; break; }
         }
         if (hide) {
-            *pp = cur->ifa_next;
-            cur->ifa_next = NULL;
-            // không free (an toàn hơn)
-            cur = *pp;
-        } else {
-            pp = &cur->ifa_next;
-            cur = cur->ifa_next;
+            // Avoid unlinking nodes because callers will free the original list.
+            // Renaming is enough for common VPN/proxy interface checks.
+            strlcpy(cur->ifa_name, "lo0", IFNAMSIZ);
         }
+        cur = cur->ifa_next;
     }
     return r;
 }

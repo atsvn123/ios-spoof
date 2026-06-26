@@ -15,7 +15,7 @@ iOSSpoof_FILES = \
 	src/SCGeoHooks.x
 
 iOSSpoof_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable -Wno-unused-function
-iOSSpoof_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation CoreTelephony SystemConfiguration
+iOSSpoof_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation CoreTelephony SystemConfiguration MapKit
 iOSSpoof_PRIVATE_FRAMEWORKS = MobileCoreServices AppSupport SpringBoardServices IOKit
 iOSSpoof_LDFLAGS = -framework CFNetwork
 

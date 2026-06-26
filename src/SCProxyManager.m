@@ -5,6 +5,7 @@ static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 #import "SCSpoofConfig.h"
 #import <sys/un.h>
 #import <sys/socket.h>
+#import <arpa/inet.h>
 #import <unistd.h>
 
 // Socket path giao tiếp với daemon (rootless: /var/jb/var/run/scproxyd.sock)

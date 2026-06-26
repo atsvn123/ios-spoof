@@ -50,21 +50,20 @@ jobs:
           export THEOS_PACKAGE_SCHEME=rootless
           make clean
           make package FINALPACKAGE=1
-        working-directory: ios-spoof
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: iOSSpoof-package
           path: |
-            ios-spoof/packages/*.deb
-            ios-spoof/*.deb
+            packages/*.deb
+            *.deb
 
       - name: Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ios-spoof/packages/*.deb
-            ios-spoof/*.deb
+            packages/*.deb
+            *.deb
           generate_release_notes: true

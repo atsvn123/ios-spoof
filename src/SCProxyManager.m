@@ -1,5 +1,6 @@
 #import "SCProxyManager.h"
 #import "SCSpoofConfig.h"
+#import "SCSpoofConfig.h"
 #import <sys/un.h>
 #import <sys/socket.h>
 #import <unistd.h>
@@ -34,8 +35,8 @@
 
 - (NSString *)socketPath {
     // rootless first
-    if (access("/var/jb/var/run", F_OK) == 0) return SC_DAEMON_SOCK_ROOTLESS;
-    return SC_DAEMON_SOCK;
+    if (access("/var/jb/var/run", F_OK) == 0) return @SC_DAEMON_SOCK_ROOTLESS;
+    return @SC_DAEMON_SOCK;
 }
 
 - (int)connectDaemon {

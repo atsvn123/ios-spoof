@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <!-- ===== MASTER ===== -->
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Bật Spoofing</string>
+            <key>key</key>
+            <string>enabled</string>
+            <key>set</key>
+            <string>setEnabled:forSpecifier:</string>
+            <key>get</key>
+            <string>readEnabled:</string>
+            <key>defaults</key>
+            <string>com.iosspoof.tweak</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Thiết bị</string>
+            <key>footerText</key>
+            <string>Chọn preset thiết bị muốn giả lập. Random sẽ chọn ngẫu nhiên mỗi lần respring.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSLinkListCell</string>
+            <key>label</key>
+            <string>Model</string>
+            <key>set</key>
+            <string>setProductType:forSpecifier:</string>
+            <key>get</key>
+            <string>readProductType:</string>
+            <key>valuesDataSource</key>
+            <string>readValues:</string>
+            <key>titlesDataSource</key>
+            <string>readTitlesForSpecifier:</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>label</key>
+            <string>Randomize mỗi lần launch</string>
+            <key>set</key>
+            <string>setEnabled:forSpecifier:</string>
+            <key>get</key>
+            <string>readEnabled:</string>
+            <key>id</key>
+            <string>randomizeOnLaunch</string>
+        </dict>
+
+        <!-- ===== CARRIER ===== -->
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Nhà mạng</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Tên mạng</string>
+            <key>set</key><string>setCarrierName:forSpecifier:</string>
+            <key>get</key><string>readCarrierName:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>MCC</string>
+            <key>set</key><string>setCarrierMCC:forSpecifier:</string>
+            <key>get</key><string>readCarrierMCC:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>MNC</string>
+            <key>set</key><string>setCarrierMNC:forSpecifier:</string>
+            <key>get</key><string>readCarrierMNC:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>ISO Country</string>
+            <key>set</key><string>setCarrierISO:forSpecifier:</string>
+            <key>get</key><string>readCarrierISO:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSLinkListCell</string>
+            <key>label</key><string>Radio Access</string>
+            <key>set</key><string>setRadioTech:forSpecifier:</string>
+            <key>get</key><string>readRadioTech:</string>
+            <key>validTitles</key>
+            <dict>
+                <key>CTRadioAccessTechnologyLTE</key><string>4G LTE</string>
+                <key>CTRadioAccessTechnologyNRNSA</key><string>5G NR (NSA)</string>
+                <key>CTRadioAccessTechnologyNR</key><string>5G NR</string>
+                <key>CTRadioAccessTechnologyHSDPA</key><string>3G HSDPA</string>
+                <key>CTRadioAccessTechnologyEdge</key><string>2G EDGE</string>
+            </dict>
+        </dict>
+
+        <!-- ===== GEO ===== -->
+        <dict>
+            <key>cell</key><string>PSGroupCell</string>
+            <key>label</key><string>Vị trí (GPS)</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Spoof GPS</string>
+            <key>set</key><string>setGeoEnabled:forSpecifier:</string>
+            <key>get</key><string>readGeoEnabled:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Vĩ độ</string>
+            <key>set</key><string>setLatitude:forSpecifier:</string>
+            <key>get</key><string>readLatitude:</string>
+            <key>keyboard</key><string>numbers</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Kinh độ</string>
+            <key>set</key><string>setLongitude:forSpecifier:</string>
+            <key>get</key><string>readLongitude:</string>
+            <key>keyboard</key><string>numbers</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Độ cao (m)</string>
+            <key>set</key><string>setAltitude:forSpecifier:</string>
+            <key>get</key><string>readAltitude:</string>
+            <key>keyboard</key><string>numbers</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Độ chính xác (m)</string>
+            <key>set</key><string>setAccuracy:forSpecifier:</string>
+            <key>get</key><string>readAccuracy:</string>
+            <key>keyboard</key><string>numbers</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Hướng (°)</string>
+            <key>set</key><string>setHeading:forSpecifier:</string>
+            <key>get</key><string>readHeading:</string>
+            <key>keyboard</key><string>numbers</string>
+        </dict>
+
+        <!-- ===== PROXY ===== -->
+        <dict>
+            <key>cell</key><string>PSGroupCell</string>
+            <key>label</key><string>Transparent Proxy</string>
+            <key>footerText</key>
+            <string>Proxy chạy ở network layer qua PF divert. KHÔNG set system proxy nên app không detect được. Cần daemon scproxyd chạy.</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Bật Proxy</string>
+            <key>set</key><string>setProxyEnabled:forSpecifier:</string>
+            <key>get</key><string>readProxyEnabled:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSLinkListCell</string>
+            <key>label</key><string>Loại</string>
+            <key>set</key><string>setProxyType:forSpecifier:</string>
+            <key>get</key><string>readProxyType:</string>
+            <key>validTitles</key>
+            <dict>
+                <key>socks5</key><string>SOCKS5</string>
+                <key>http</key><string>HTTP CONNECT</string>
+            </dict>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Host</string>
+            <key>set</key><string>setProxyHost:forSpecifier:</string>
+            <key>get</key><string>readProxyHost:</string>
+            <key>placeholder</key><string>127.0.0.1</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Port</string>
+            <key>set</key><string>setProxyPort:forSpecifier:</string>
+            <key>get</key><string>readProxyPort:</string>
+            <key>keyboard</key><string>numbers</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>User</string>
+            <key>set</key><string>setProxyUser:forSpecifier:</string>
+            <key>get</key><string>readProxyUser:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSEditTextCell</string>
+            <key>label</key><string>Password</string>
+            <key>set</key><string>setProxyPass:forSpecifier:</string>
+            <key>get</key><string>readProxyPass:</string>
+            <key>isSecure</key><true/>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>SOCKS5 UDP Associate</string>
+            <key>set</key><string>setProxyUDP:forSpecifier:</string>
+            <key>get</key><string>readProxyUDP:</string>
+        </dict>
+
+        <!-- ===== ANTI-DETECT ===== -->
+        <dict>
+            <key>cell</key><string>PSGroupCell</string>
+            <key>label</key><string>Anti-Detect</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Ẩn Proxy Settings</string>
+            <key>set</key><string>setHideProxy:forSpecifier:</string>
+            <key>get</key><string>readHideProxy:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Ẩn VPN Interface</string>
+            <key>set</key><string>setHideVPN:forSpecifier:</string>
+            <key>get</key><string>readHideVPN:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Ẩn Jailbreak</string>
+            <key>set</key><string>setHideJailbreak:forSpecifier:</string>
+            <key>get</key><string>readHideJailbreak:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Spoof IDFA</string>
+            <key>set</key><string>setSpoofIDFA:forSpecifier:</string>
+            <key>get</key><string>readSpoofIDFA:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Spoof IDFV</string>
+            <key>set</key><string>setSpoofIDFV:forSpecifier:</string>
+            <key>get</key><string>readSpoofIDFV:</string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSSwitchCell</string>
+            <key>label</key><string>Spoof Battery</string>
+            <key>set</key><string>setSpoofBattery:forSpecifier:</string>
+            <key>get</key><string>readSpoofBattery:</string>
+        </dict>
+
+        <!-- ===== APPLY ===== -->
+        <dict>
+            <key>cell</key><string>PSGroupCell</string>
+            <key>label</key><string></string>
+        </dict>
+        <dict>
+            <key>cell</key><string>PSButtonCell</string>
+            <key>label</key><string>Áp dụng &amp; Respring</string>
+            <key>action</key><string>applyAndRespring</string>
+        </dict>
+    </array>
+</dict>
+</plist>

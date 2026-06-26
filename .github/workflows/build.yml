@@ -1,0 +1,70 @@
+name: Build iOSSpoof
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer 2>/dev/null || true
+          xcode-select -p
+
+      - name: Install Theos
+        run: |
+          brew install ldid make perl
+          mkdir -p ~/theos
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          # Install SDKs
+          curl -L -o ~/theos/sdks.tar.xz https://github.com/theos/sdks/releases/latest/download/sdks.tar.xz || true
+          if [ -f ~/theos/sdks.tar.xz ]; then
+            tar -xf ~/theos/sdks.tar.xz -C ~/theos/sdks/ 2>/dev/null || true
+          fi
+          # Fallback: clone SDK repo
+          if [ ! -d ~/theos/sdks/iPhoneOS16.5.sdk ]; then
+            git clone https://github.com/theos/sdks.git /tmp/sdks
+            cp -R /tmp/sdks/*.sdk ~/theos/sdks/ 2>/dev/null || true
+          fi
+
+      - name: Verify Theos
+        run: |
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          ls ~/theos/sdks/ || true
+          ~/theos/bin/theos --version || echo "theos check done"
+
+      - name: Build tweak
+        run: |
+          export THEOS=$HOME/theos
+          export THEOS_PACKAGE_SCHEME=rootless
+          make clean
+          make package FINALPACKAGE=1
+        working-directory: ios-spoof
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iOSSpoof-package
+          path: |
+            ios-spoof/packages/*.deb
+            ios-spoof/*.deb
+
+      - name: Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ios-spoof/packages/*.deb
+            ios-spoof/*.deb
+          generate_release_notes: true

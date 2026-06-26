@@ -1,0 +1,9 @@
+Package: com.iosspoof.tweak
+Name: iOSSpoof
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Advanced device spoofer with transparent proxy, carrier/geo spoofing and anti-detection.
+Maintainer: iOS Spoof
+Author: iOS Spoof
+Section: Tweaks
+Depends: mobilesubstrate

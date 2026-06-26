@@ -1,0 +1,15 @@
+# Build
+*.deb
+*.dylib
+*.plist.o
+packages/
+obj/
+.theos/
+.DS_Store
+
+# Theos
+.theos_cache
+
+# Xcode
+*.xcuserstate
+xcuserdata/

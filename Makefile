@@ -16,7 +16,7 @@ iOSSpoof_FILES = \
 
 iOSSpoof_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable -Wno-unused-function
 iOSSpoof_FRAMEWORKS = Foundation CoreFoundation UIKit CoreLocation CoreTelephony SystemConfiguration MapKit
-iOSSpoof_PRIVATE_FRAMEWORKS = MobileCoreServices AppSupport SpringBoardServices IOKit
+iOSSpoof_PRIVATE_FRAMEWORKS = IOKit
 iOSSpoof_LDFLAGS = -framework CFNetwork
 
 include $(THEOS_MAKE_PATH)/tweak.mk

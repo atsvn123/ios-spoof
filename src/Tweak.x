@@ -47,6 +47,7 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
 
 %ctor {
     @autoreleasepool {
+        %init(_ungrouped);
         // trigger load config
         [SCSpoofConfig shared];
         SCApplyProxyIfNeeded();

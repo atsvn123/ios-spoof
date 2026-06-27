@@ -7,5 +7,6 @@ elif [ -x "/usr/bin/uicache" ]; then
 fi
 
 killall -9 lsd >/dev/null 2>&1 || true
+killall -9 iconservicesagent >/dev/null 2>&1 || true
 
 exit 0

@@ -87,7 +87,7 @@ jobs:
             (cd /tmp/iosspoof-deb && for f in data.tar.*; do [ -f "$f" ] && tar -tf "$f" | grep -E 'iOSSpoof\.app|iOSSpoof\.app/iOSSpoof$|Info\.plist' || true; done)
             mkdir -p /tmp/iosspoof-deb/root
             (cd /tmp/iosspoof-deb/root && for f in ../data.tar.*; do [ -f "$f" ] && tar -xf "$f" || true; done)
-            find /tmp/iosspoof-deb -path '*iOSSpoof.app*' -maxdepth 6 -print || true
+            find /tmp/iosspoof-deb -maxdepth 8 -path '*iOSSpoof.app*' -print || true
             if [ -f /tmp/iosspoof-deb/root/var/jb/Applications/iOSSpoof.app/Info.plist ]; then
               plutil -p /tmp/iosspoof-deb/root/var/jb/Applications/iOSSpoof.app/Info.plist || true
             fi

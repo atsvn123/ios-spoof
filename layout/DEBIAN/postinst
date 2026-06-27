@@ -1,25 +1,42 @@
 #!/bin/sh
 
-APP_PATH="/Applications/iOSSpoof.app"
-ROOTLESS_APP_PATH="/var/jb/Applications/iOSSpoof.app"
+APP_ROOTLESS="/var/jb/Applications/iOSSpoof.app"
+APP_VIRTUAL="/Applications/iOSSpoof.app"
 
-if [ -d "$ROOTLESS_APP_PATH" ]; then
-    APP_PATH="$ROOTLESS_APP_PATH"
+for app in "$APP_ROOTLESS" "$APP_VIRTUAL"; do
+    if [ -d "$app" ]; then
+        chmod 755 "$app" >/dev/null 2>&1 || true
+        chmod 755 "$app/iOSSpoof" >/dev/null 2>&1 || true
+    fi
+done
+
+# Some rootless setups expose /Applications virtually; try to create a best-effort alias if writable.
+if [ -d "$APP_ROOTLESS" ] && [ ! -e "$APP_VIRTUAL" ]; then
+    ln -s "$APP_ROOTLESS" "$APP_VIRTUAL" >/dev/null 2>&1 || true
 fi
 
-chmod 755 "$APP_PATH" >/dev/null 2>&1 || true
-chmod 755 "$APP_PATH/iOSSpoof" >/dev/null 2>&1 || true
-
+UICACHE=""
 if [ -x "/var/jb/usr/bin/uicache" ]; then
-    /var/jb/usr/bin/uicache -p "$APP_PATH" >/dev/null 2>&1 || \
-    /var/jb/usr/bin/uicache -p "/Applications/iOSSpoof.app" >/dev/null 2>&1 || \
-    /var/jb/usr/bin/uicache -a >/dev/null 2>&1 || true
+    UICACHE="/var/jb/usr/bin/uicache"
 elif [ -x "/usr/bin/uicache" ]; then
-    /usr/bin/uicache -p "$APP_PATH" >/dev/null 2>&1 || \
-    /usr/bin/uicache -p "/Applications/iOSSpoof.app" >/dev/null 2>&1 || \
-    /usr/bin/uicache -a >/dev/null 2>&1 || true
+    UICACHE="/usr/bin/uicache"
+fi
+
+if [ -n "$UICACHE" ]; then
+    "$UICACHE" -p "$APP_ROOTLESS" >/dev/null 2>&1 || true
+    "$UICACHE" -p "$APP_VIRTUAL" >/dev/null 2>&1 || true
+    "$UICACHE" -a >/dev/null 2>&1 || true
 fi
 
 killall -9 lsd >/dev/null 2>&1 || true
+killall -9 iconservicesagent >/dev/null 2>&1 || true
+
+if [ -x "/var/jb/usr/bin/sbreload" ]; then
+    /var/jb/usr/bin/sbreload >/dev/null 2>&1 || true
+elif [ -x "/usr/bin/sbreload" ]; then
+    /usr/bin/sbreload >/dev/null 2>&1 || true
+else
+    killall -9 SpringBoard >/dev/null 2>&1 || true
+fi
 
 exit 0

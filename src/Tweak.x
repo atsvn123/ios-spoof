@@ -347,7 +347,7 @@ static int sc_getattrlist(const char *path, struct attrlist *attrList, void *att
 %end
 
 %hook NSURL
-- (BOOL)getResourceValue:(out id  _Nullable *)value forKey:(NSURLResourceKey)key error:(NSError **)error {
+- (BOOL)getResourceValue:(id *)value forKey:(NSURLResourceKey)key error:(NSError **)error {
     BOOL ok = %orig;
     if (ok && SC_ON() && value) {
         unsigned long long total = SCFakeTotalBytes();

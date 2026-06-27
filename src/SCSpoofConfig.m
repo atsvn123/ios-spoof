@@ -193,9 +193,6 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     }
     return NO;
 }
-    }
-    return NO;
-}
 - (SCDevicePreset *)resolvedPreset { return _resolved; }
 - (NSString *)spoofedUDID { return _udid; }
 - (NSString *)spoofedSerial { return _serial; }

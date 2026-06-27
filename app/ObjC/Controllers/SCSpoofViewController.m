@@ -639,12 +639,8 @@
 }
 
 - (void)showLocalePicker {
-    SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
-    // Reuse the search VC pattern but for locales
-    // Actually, use a simple UIAlertController with search
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Locale" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     NSArray *locales = [SCLocaleStore allLocales];
-    // Show first 20 most common, rest via search
     for (NSUInteger j = 0; j < MIN(locales.count, 20); j++) {
         NSDictionary *l = locales[j];
         [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ (%@)", l[@"country"], l[@"code"]] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
@@ -654,6 +650,19 @@
             [self.tableView reloadData];
         }]];
     }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset to System" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        self.config.localeIdentifier = @"";
+        self.config.timezoneIdentifier = @"";
+        [self.config save];
+        [self.tableView reloadData];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        alert.popoverPresentationController.sourceView = self.view;
+        alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+    }
+    [self presentViewController:alert animated:YES completion:nil];
+}
     [alert addAction:[UIAlertAction actionWithTitle:@"Search all..." style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         [self showLocaleSearch];
     }]];
@@ -715,7 +724,7 @@
         [self.config save];
         [self.tableView reloadData];
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertControllerStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
     if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
         alert.popoverPresentationController.sourceView = self.view;
         alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);

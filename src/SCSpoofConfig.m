@@ -29,12 +29,30 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 }
 
 - (NSString *)prefsPath {
-    // Injected apps are sandboxed, so NSUserDomain paths point to the app container.
-    // Preferences must be read from the global mobile domain instead.
-    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb/var/mobile/Library/Preferences"]) {
-        return @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist";
-    }
-    return @"/var/mobile/Library/Preferences/com.iosspoof.tweak.plist";
+    // Try multiple paths for rootless/rootful jailbreaks
+    // Rootless: /var/jb/var/mobile/Library/Preferences/
+    // Rootful: /var/mobile/Library/Preferences/
+    // Some rootless may use different prefix
+    static NSString *cachedPath = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray *candidates = @[
+            @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist",
+            @"/var/mobile/Library/Preferences/com.iosspoof.tweak.plist",
+            @"/var/jb/var/root/Library/Preferences/com.iosspoof.tweak.plist",
+            @"/var/root/Library/Preferences/com.iosspoof.tweak.plist",
+        ];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        for (NSString *p in candidates) {
+            if ([fm fileExistsAtPath:p]) {
+                cachedPath = p;
+                return;
+            }
+        }
+        // Default to rootless path (will be created by config app)
+        cachedPath = @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist";
+    });
+    return cachedPath;
 }
 
 - (void)reload {
@@ -194,16 +212,38 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
             @"com.opa334.TrollStore",
             @"com.opa334.TrollStorePersistenceHelper",
             @"com.apple.springboard",
+            @"com.apple.Preferences",
+            @"com.apple.mobilesafari",
+            @"com.apple.MobileSMS",
+            @"com.apple.mobilephone",
+            @"com.apple.mobilemail",
+            @"com.apple.appstore",
+            @"com.apple.AppStore",
+            @"com.apple.itunesu",
+            @"com.apple.iTunesU",
+            @"com.apple.Diagnostic",
+            @"com.apple.diagnostics",
             @"com.apple.Preferences"
         ]];
     });
     if ([protectedBundles containsObject:_bundleID]) return NO;
-    if (_targetBundles.count == 0) return NO;
-    for (NSString *target in _targetBundles) {
-        if ([target isKindOfClass:[NSString class]] && [_bundleID isEqualToString:target]) {
-            return YES;
+    
+    // If targetBundles is populated, only inject into listed apps
+    if (_targetBundles.count > 0) {
+        for (NSString *target in _targetBundles) {
+            if ([target isKindOfClass:[NSString class]] && [_bundleID isEqualToString:target]) {
+                return YES;
+            }
         }
+        return NO;
     }
+    
+    // If targetBundles is empty but enabled=YES, inject into ALL non-protected apps
+    // This is the "global mode" — useful when user wants to spoof everything
+    if (_enabled) {
+        return YES;
+    }
+    
     return NO;
 }
 - (SCDevicePreset *)resolvedPreset { return _resolved; }

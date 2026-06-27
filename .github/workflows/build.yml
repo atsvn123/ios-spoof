@@ -77,16 +77,22 @@ jobs:
         run: |
           for deb in packages/*.deb; do
             echo "Inspecting $deb"
-            dpkg-deb -c "$deb" | grep -E 'iOSSpoof\.app|iOSSpoof\.app/iOSSpoof$|Info\.plist|DEBIAN/postinst|DEBIAN/postrm' || true
             rm -rf /tmp/iosspoof-deb
             mkdir -p /tmp/iosspoof-deb
-            dpkg-deb -x "$deb" /tmp/iosspoof-deb
+            cp "$deb" /tmp/iosspoof-deb/package.deb
+            (cd /tmp/iosspoof-deb && ar -x package.deb)
+            echo "Control archive:"
+            (cd /tmp/iosspoof-deb && for f in control.tar.*; do [ -f "$f" ] && tar -tf "$f" | grep -E 'postinst|postrm|control' || true; done)
+            echo "Data archive:"
+            (cd /tmp/iosspoof-deb && for f in data.tar.*; do [ -f "$f" ] && tar -tf "$f" | grep -E 'iOSSpoof\.app|iOSSpoof\.app/iOSSpoof$|Info\.plist' || true; done)
+            mkdir -p /tmp/iosspoof-deb/root
+            (cd /tmp/iosspoof-deb/root && for f in ../data.tar.*; do [ -f "$f" ] && tar -xf "$f" || true; done)
             find /tmp/iosspoof-deb -path '*iOSSpoof.app*' -maxdepth 6 -print || true
-            if [ -f /tmp/iosspoof-deb/var/jb/Applications/iOSSpoof.app/Info.plist ]; then
-              plutil -p /tmp/iosspoof-deb/var/jb/Applications/iOSSpoof.app/Info.plist || true
+            if [ -f /tmp/iosspoof-deb/root/var/jb/Applications/iOSSpoof.app/Info.plist ]; then
+              plutil -p /tmp/iosspoof-deb/root/var/jb/Applications/iOSSpoof.app/Info.plist || true
             fi
-            if [ -f /tmp/iosspoof-deb/Applications/iOSSpoof.app/Info.plist ]; then
-              plutil -p /tmp/iosspoof-deb/Applications/iOSSpoof.app/Info.plist || true
+            if [ -f /tmp/iosspoof-deb/root/Applications/iOSSpoof.app/Info.plist ]; then
+              plutil -p /tmp/iosspoof-deb/root/Applications/iOSSpoof.app/Info.plist || true
             fi
           done
 

@@ -2,7 +2,7 @@
 
 @interface SCAppsViewController ()
 @property (nonatomic, copy) NSArray<NSDictionary *> *apps;
-@property (nonatomic, copy) NSMutableSet<NSString *> *selected;
+@property (nonatomic, strong) NSMutableSet<NSString *> *selected;
 @end
 
 @implementation SCAppsViewController
@@ -11,9 +11,20 @@
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; self.selected=[NSMutableSet setWithArray:self.config.targetBundles ?: @[]]; }
 - (void)loadApps { dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ NSArray *a=[self fetchApps]; dispatch_async(dispatch_get_main_queue(), ^{ self.apps=a; [self.tableView reloadData]; }); }); }
 - (NSArray *)fetchApps {
+    NSSet *protectedBundles = [NSSet setWithArray:@[
+        @"com.iosspoof.app",
+        @"org.coolstar.SileoStore",
+        @"org.coolstar.Sileo",
+        @"com.saurik.Cydia",
+        @"xyz.willy.Zebra",
+        @"me.apptapp.Installer",
+        @"com.opa334.Dopamine",
+        @"com.opa334.TrollStore",
+        @"com.opa334.TrollStorePersistenceHelper"
+    ]];
     Class cls=NSClassFromString(@"LSApplicationWorkspace"); id ws=[cls performSelector:NSSelectorFromString(@"defaultWorkspace")];
     NSArray *raw=[ws performSelector:NSSelectorFromString(@"allInstalledApplications")]; NSMutableArray *out=[NSMutableArray array];
-    for(id app in raw){ NSString*b=[app valueForKey:@"applicationIdentifier"]; if(!b || [b isEqualToString:@"com.iosspoof.app"]) continue; NSString*n=[app valueForKey:@"localizedName"] ?: b; NSString*t=[app valueForKey:@"applicationType"] ?: @""; if([t isEqualToString:@"System"]) continue; [out addObject:@{@"name":n,@"bundle":b}]; }
+    for(id app in raw){ NSString*b=[app valueForKey:@"applicationIdentifier"]; if(!b || [protectedBundles containsObject:b]) continue; NSString*n=[app valueForKey:@"localizedName"] ?: b; NSString*t=[app valueForKey:@"applicationType"] ?: @""; if([t isEqualToString:@"System"]) continue; [out addObject:@{@"name":n,@"bundle":b}]; }
     return [out sortedArrayUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES selector:@selector(localizedCaseInsensitiveCompare:)]]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }

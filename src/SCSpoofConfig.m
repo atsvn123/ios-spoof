@@ -167,6 +167,22 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 
 - (NSString *)currentBundleID { return _bundleID; }
 - (BOOL)shouldInjectForCurrentBundle {
+    static NSSet *protectedBundles;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        protectedBundles = [NSSet setWithArray:@[
+            @"com.iosspoof.app",
+            @"org.coolstar.SileoStore",
+            @"org.coolstar.Sileo",
+            @"com.saurik.Cydia",
+            @"xyz.willy.Zebra",
+            @"me.apptapp.Installer",
+            @"com.opa334.Dopamine",
+            @"com.opa334.TrollStore",
+            @"com.opa334.TrollStorePersistenceHelper"
+        ]];
+    });
+    if ([protectedBundles containsObject:_bundleID]) return NO;
     if (_targetBundles.count == 0) return NO;
     for (NSString *target in _targetBundles) {
         if ([target isKindOfClass:[NSString class]] && [_bundleID isEqualToString:target]) {

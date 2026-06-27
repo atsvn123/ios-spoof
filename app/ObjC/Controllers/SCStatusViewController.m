@@ -38,19 +38,23 @@ extern char **environ;
         NSArray *vals = @[self.config.geoEnabled ? @"Bật" : @"Tắt", @(self.config.latitude), @(self.config.longitude), @(self.config.altitude), @(self.config.horizontalAccuracy)];
         return [self cellWithTitle:@[@"GPS", @"Lat", @"Lon", @"Altitude", @"Accuracy"][indexPath.row] detail:[vals[indexPath.row] description]];
     }
-    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-    cell.textLabel.text = indexPath.row == 0 ? @"Randomize All" : @"Respring";
-    cell.textLabel.textColor = indexPath.row == 0 ? [UIColor systemPurpleColor] : [UIColor systemOrangeColor];
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    if (indexPath.row == 0) {
+        cell.textLabel.text = @"Randomize All";
+        cell.detailTextLabel.text = @"Đổi ngẫu nhiên model/carrier/GPS/IDs";
+        cell.textLabel.textColor = [UIColor systemPurpleColor];
+    } else {
+        cell.textLabel.text = @"Không cần Respring";
+        cell.detailTextLabel.text = @"Thay đổi sẽ có hiệu lực khi app mục tiêu mở lại. Nếu icon app jailbreak biến mất, vào Dopamine > Refresh Jailbreak Apps.";
+        cell.textLabel.textColor = [UIColor secondaryLabelColor];
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    }
     return cell;
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     if (indexPath.section != 4) return;
     if (indexPath.row == 0) { [self.config randomizeAll]; [self.tableView reloadData]; return; }
-    NSString *killall = [[NSFileManager defaultManager] isExecutableFileAtPath:@"/var/jb/usr/bin/killall"] ? @"/var/jb/usr/bin/killall" : @"/usr/bin/killall";
-    pid_t pid = 0;
-    char *args[] = {(char *)killall.UTF8String, "-9", "SpringBoard", NULL};
-    posix_spawn(&pid, killall.UTF8String, NULL, NULL, args, environ);
 }
 - (void)toggleEnabled:(UISwitch *)sw { self.config.enabled = sw.on; [self.config save]; }
 

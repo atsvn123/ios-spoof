@@ -10,25 +10,4 @@ for app in "$APP_ROOTLESS" "$APP_VIRTUAL"; do
     fi
 done
 
-# Some rootless setups expose /Applications virtually; try to create a best-effort alias if writable.
-if [ -d "$APP_ROOTLESS" ] && [ ! -e "$APP_VIRTUAL" ]; then
-    ln -s "$APP_ROOTLESS" "$APP_VIRTUAL" >/dev/null 2>&1 || true
-fi
-
-UICACHE=""
-if [ -x "/var/jb/usr/bin/uicache" ]; then
-    UICACHE="/var/jb/usr/bin/uicache"
-elif [ -x "/usr/bin/uicache" ]; then
-    UICACHE="/usr/bin/uicache"
-fi
-
-if [ -n "$UICACHE" ]; then
-    "$UICACHE" -p "$APP_ROOTLESS" >/dev/null 2>&1 || true
-    "$UICACHE" -p "$APP_VIRTUAL" >/dev/null 2>&1 || true
-    "$UICACHE" -a >/dev/null 2>&1 || true
-fi
-
-killall -9 lsd >/dev/null 2>&1 || true
-killall -9 iconservicesagent >/dev/null 2>&1 || true
-
 exit 0

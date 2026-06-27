@@ -2,35 +2,24 @@
 
 APP_PATH="/Applications/iOSSpoof.app"
 ROOTLESS_APP_PATH="/var/jb/Applications/iOSSpoof.app"
-LOG="/var/mobile/Library/Logs/iOSSpoof-postinst.log"
-mkdir -p /var/mobile/Library/Logs >/dev/null 2>&1 || true
-echo "postinst $(date)" > "$LOG" 2>/dev/null || true
-echo "uid=$(id -u) rootless_exists=$([ -d "$ROOTLESS_APP_PATH" ] && echo yes || echo no)" >> "$LOG" 2>/dev/null || true
+
 if [ -d "$ROOTLESS_APP_PATH" ]; then
     APP_PATH="$ROOTLESS_APP_PATH"
 fi
-echo "APP_PATH=$APP_PATH" >> "$LOG" 2>/dev/null || true
-ls -la "$APP_PATH" >> "$LOG" 2>/dev/null || true
-if [ -f "$APP_PATH/Info.plist" ]; then
-    /usr/bin/plutil -p "$APP_PATH/Info.plist" >> "$LOG" 2>/dev/null || true
-fi
 
-# Ensure SpringBoard can discover the app bundle even if dpkg preserves restrictive modes.
 chmod 755 "$APP_PATH" >/dev/null 2>&1 || true
 chmod 755 "$APP_PATH/iOSSpoof" >/dev/null 2>&1 || true
-echo "after chmod" >> "$LOG" 2>/dev/null || true
 
 if [ -x "/var/jb/usr/bin/uicache" ]; then
-    echo "using /var/jb/usr/bin/uicache" >> "$LOG" 2>/dev/null || true
-    /var/jb/usr/bin/uicache -p "$APP_PATH" >> "$LOG" 2>&1 || /var/jb/usr/bin/uicache -p "/Applications/iOSSpoof.app" >> "$LOG" 2>&1 || /var/jb/usr/bin/uicache -a >> "$LOG" 2>&1 || true
+    /var/jb/usr/bin/uicache -p "$APP_PATH" >/dev/null 2>&1 || \
+    /var/jb/usr/bin/uicache -p "/Applications/iOSSpoof.app" >/dev/null 2>&1 || \
+    /var/jb/usr/bin/uicache -a >/dev/null 2>&1 || true
 elif [ -x "/usr/bin/uicache" ]; then
-    echo "using /usr/bin/uicache" >> "$LOG" 2>/dev/null || true
-    /usr/bin/uicache -p "$APP_PATH" >> "$LOG" 2>&1 || /usr/bin/uicache -p "/Applications/iOSSpoof.app" >> "$LOG" 2>&1 || /usr/bin/uicache -a >> "$LOG" 2>&1 || true
-else
-    echo "uicache not found" >> "$LOG" 2>/dev/null || true
+    /usr/bin/uicache -p "$APP_PATH" >/dev/null 2>&1 || \
+    /usr/bin/uicache -p "/Applications/iOSSpoof.app" >/dev/null 2>&1 || \
+    /usr/bin/uicache -a >/dev/null 2>&1 || true
 fi
 
 killall -9 lsd >/dev/null 2>&1 || true
-echo "done" >> "$LOG" 2>/dev/null || true
 
 exit 0

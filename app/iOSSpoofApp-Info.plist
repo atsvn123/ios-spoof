@@ -16,6 +16,10 @@
     <string>iOSSpoof</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>iPhoneOS</string>
+    </array>
     <key>CFBundleIcons</key>
     <dict>
         <key>CFBundlePrimaryIcon</key>
@@ -35,6 +39,8 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
     <key>MinimumOSVersion</key>
     <string>14.0</string>
     <key>UIDeviceFamily</key>

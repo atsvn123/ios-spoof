@@ -297,7 +297,19 @@
 #pragma mark - Carrier (preset at top, empty fields below)
 
 - (UITableViewCell *)carrierPresetCell {
-    NSString *detail = self.carrierPresetIndex >= 0 ? @[@"Viettel 4G",@"Mobifone 4G",@"Vinaphone 4G",@"Viettel 5G"][self.carrierPresetIndex] : @"Chọn preset";
+    NSArray *names = @[
+        @"Viettel 4G", @"Mobifone 4G", @"Vinaphone 4G", @"Viettel 5G",
+        @"T-Mobile US", @"AT&T US", @"Verizon US", @"Sprint US",
+        @"Vodafone UK", @"O2 UK", @"EE UK", @"Three UK",
+        @"Orange FR", @"SFR FR", @"Bouygues FR",
+        @"Docomo JP", @"SoftBank JP", @"au JP",
+        @"SK Telecom KR", @"KT KR", @"LG U+ KR",
+        @"Movistar ES", @"Vodafone ES", @"Orange ES",
+        @"Telstra AU", @"Optus AU",
+        @"Jio IN", @"Airtel IN", @"Vi IN",
+        @"China Mobile", @"China Unicom", @"China Telecom"
+    ];
+    NSString *detail = self.carrierPresetIndex >= 0 && self.carrierPresetIndex < (NSInteger)names.count ? names[self.carrierPresetIndex] : @"Chọn preset";
     UITableViewCell *c = [self cellWithTitle:@"Preset" detail:detail];
     c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     c.selectionStyle = UITableViewCellSelectionStyleDefault;

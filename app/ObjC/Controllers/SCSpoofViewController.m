@@ -663,30 +663,6 @@
     }
     [self presentViewController:alert animated:YES completion:nil];
 }
-    [alert addAction:[UIAlertAction actionWithTitle:@"Search all..." style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        [self showLocaleSearch];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Reset to System" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
-        self.config.localeIdentifier = @"";
-        self.config.timezoneIdentifier = @"";
-        [self.config save];
-        [self.tableView reloadData];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
-    if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
-        alert.popoverPresentationController.sourceView = self.view;
-        alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
-    }
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-- (void)showLocaleSearch {
-    SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
-    vc.title = @"Search Locale";
-    // We need a different VC for locale search, but let's use a simple approach:
-    // Push a UITableViewController with search bar
-    [self.navigationController pushViewController:vc animated:YES];
-}
 
 - (void)showTimezonePicker {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Timezone" message:nil preferredStyle:UIAlertControllerStyleActionSheet];

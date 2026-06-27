@@ -12,6 +12,8 @@
         <string>SCRootListController</string>
         <key>label</key>
         <string>iOSSpoof</string>
+        <key>icon</key>
+        <string>iosspoof.png</string>
         <key>isController</key>
         <true/>
     </dict>

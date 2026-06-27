@@ -20,11 +20,10 @@
 #import <mach-o/dyld.h>
 #import <sandbox.h>
 #import <sys/sysctl.h>
-#import <libproc.h>
 #import <mach/mach_traps.h>
 #import <mach/task_info.h>
 #import <mach/mach_init.h>
-#import <sys/proc_info.h>
+#import <mach/mach_port.h>
 #import <substrate.h>
 #import <IOKit/IOKitLib.h>
 
@@ -962,6 +961,53 @@ static int sc_posix_spawn(pid_t *pid, const char *path, void *file_actions, void
 }
 
 // ============================================================================
+//  6c. Mach-level anti-detection (roothide does NOT cover these)
+// ============================================================================
+
+// mach_port_names — banking apps enumerate mach ports to find jailbreakd
+static kern_return_t (*orig_mach_port_names)(task_t task, mach_port_name_array_t *names, mach_msg_type_number_t *namesCnt, mach_port_type_array_t *types, mach_msg_type_number_t *typesCnt);
+static kern_return_t sc_mach_port_names(task_t task, mach_port_name_array_t *names, mach_msg_type_number_t *namesCnt, mach_port_type_array_t *types, mach_msg_type_number_t *typesCnt) {
+    kern_return_t r = orig_mach_port_names(task, names, namesCnt, types, typesCnt);
+    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && names && *names && *namesCnt > 0) {
+        // We can't easily filter individual ports (would break port array)
+        // But we can reduce the count slightly to hide injected ports
+        // This is a best-effort approach — mach port names are opaque integers
+    }
+    return r;
+}
+
+// task_threads — banking apps check for injected threads (ellekit/substrate create threads)
+static kern_return_t (*orig_task_threads)(task_t target_task, thread_act_array_t *thread_list, mach_msg_type_number_t *thread_count);
+static kern_return_t sc_task_threads(task_t target_task, thread_act_array_t *thread_list, mach_msg_type_number_t *thread_count) {
+    kern_return_t r = orig_task_threads(target_task, thread_list, thread_count);
+    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && thread_count && *thread_count > 1) {
+        // Substrate/ellekit may create 1-2 extra threads for hooking
+        // Reduce count by 1 to hide the hook thread
+        if (*thread_count > 2) {
+            (*thread_count)--;
+        }
+    }
+    return r;
+}
+
+// thread_info — banking apps check thread names for substrate/ellekit threads
+static kern_return_t (*orig_thread_info)(thread_act_t thread_act, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t *thread_info_count);
+static kern_return_t sc_thread_info(thread_act_t thread_act, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t *thread_info_count) {
+    kern_return_t r = orig_thread_info(thread_act, flavor, thread_info_out, thread_info_count);
+    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && flavor == THREAD_EXTENDED_INFO && thread_info_out) {
+        thread_extended_info_t info = (thread_extended_info_t)thread_info_out;
+        // Check thread name for jailbreak-related strings
+        if (strstr(info->pth_name, "substrate") || strstr(info->pth_name, "ellekit") ||
+            strstr(info->pth_name, "Substrate") || strstr(info->pth_name, "ElleKit") ||
+            strstr(info->pth_name, "iOSSpoof") || strstr(info->pth_name, "tweak") ||
+            strstr(info->pth_name, "hook")) {
+            strlcpy(info->pth_name, "com.apple.main-thread", sizeof(info->pth_name));
+        }
+    }
+    return r;
+}
+
+// ============================================================================
 //  7. NSBundle
 // ============================================================================
 
@@ -1212,5 +1258,8 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
         MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
         MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
+        MSHookFunction((void *)&mach_port_names, (void *)sc_mach_port_names, (void **)&orig_mach_port_names);
+        MSHookFunction((void *)&task_threads, (void *)sc_task_threads, (void **)&orig_task_threads);
+        MSHookFunction((void *)&thread_info, (void *)sc_thread_info, (void **)&orig_thread_info);
     }
 }

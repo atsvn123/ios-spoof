@@ -6,4 +6,4 @@ Description: Advanced device spoofer with transparent proxy, carrier/geo spoofin
 Maintainer: iOS Spoof
 Author: iOS Spoof
 Section: Tweaks
-Depends: mobilesubstrate
+Depends: mobilesubstrate, preferenceloader

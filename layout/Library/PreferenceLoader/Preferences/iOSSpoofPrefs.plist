@@ -8,6 +8,8 @@
         <string>iOSSpoofPrefs</string>
         <key>cell</key>
         <string>PSLinkCell</string>
+        <key>detail</key>
+        <string>SCRootListController</string>
         <key>label</key>
         <string>iOSSpoof</string>
         <key>isController</key>

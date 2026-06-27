@@ -29,8 +29,7 @@ iOSSpoofApp_PRIVATE_FRAMEWORKS = IOKit
 iOSSpoofApp_LDFLAGS = -Wl,-undefined,dynamic_lookup
 
 iOSSpoofApp_INSTALL_PATH = /Applications
-iOSSpoofApp_CODESIGN_FLAGS = -S-
-iOSSpoofApp_BUNDLE_NAME = iOSSpoof
+iOSSpoofApp_CODESIGN_FLAGS = -S
 iOSSpoofApp_INFO_PLIST = iOSSpoofApp-Info.plist
 
 include $(THEOS_MAKE_PATH)/application.mk

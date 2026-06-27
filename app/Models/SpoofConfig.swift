@@ -291,7 +291,7 @@ final class SpoofConfig: ObservableObject {
         let killallPath = access("/var/jb/usr/bin/killall", 0) == 0 ? "/var/jb/usr/bin/killall" : "/usr/bin/killall"
         let pidptr = UnsafeMutablePointer<pid_t>.allocate(capacity: 1)
         defer { pidptr.deallocate() }
-        var args: [UnsafeMutablePointer<CChar>?] = [
+        let args: [UnsafeMutablePointer<CChar>?] = [
             strdup(killallPath),
             strdup("-9"),
             strdup("SpringBoard"),

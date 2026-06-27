@@ -365,6 +365,98 @@ static void SCHookNEHotspotNetworkIfLoaded(void) {
 }
 
 // ============================================================================
+//  6c. NWPath / NWInterface (Network.framework) - fake WiFi/Cellular status
+//      Đây là API modern mà Facebook, TikTok, banking apps dùng.
+//      NWPathMonitor tạo NWPath objects, app đọc status/isExpensive/usesInterfaceType.
+// ============================================================================
+
+// NWPathStatus: 0=invalid, 1=satisfied, 2=unsatisfied, 3=satisfiesConstraint
+// NWInterfaceType: 1=WiFi, 2=Cellular, 3=Wired, 4=Loopback
+
+static int32_t (*orig_NWPath_status)(id, SEL);
+static int32_t sc_NWPath_status(id self, SEL _cmd) {
+    if (SC_ON()) return 1; // satisfied
+    return orig_NWPath_status ? orig_NWPath_status(self, _cmd) : 1;
+}
+
+static BOOL (*orig_NWPath_isExpensive)(id, SEL);
+static BOOL sc_NWPath_isExpensive(id self, SEL _cmd) {
+    if (SC_ON() && CFG().networkMode == 2) return YES; // cellular = expensive
+    if (SC_ON() && CFG().networkMode == 1) return NO;  // wifi = not expensive
+    return orig_NWPath_isExpensive ? orig_NWPath_isExpensive(self, _cmd) : NO;
+}
+
+static BOOL (*orig_NWPath_isConstrained)(id, SEL);
+static BOOL sc_NWPath_isConstrained(id self, SEL _cmd) {
+    if (SC_ON()) return NO;
+    return orig_NWPath_isConstrained ? orig_NWPath_isConstrained(self, _cmd) : NO;
+}
+
+static BOOL (*orig_NWPath_usesInterfaceType)(id, SEL, int32_t);
+static BOOL sc_NWPath_usesInterfaceType(id self, SEL _cmd, int32_t interfaceType) {
+    if (SC_ON()) {
+        if (CFG().networkMode == 2) {
+            // Cellular mode: YES for cellular, NO for WiFi
+            if (interfaceType == 2) return YES; // Cellular
+            if (interfaceType == 1) return NO;  // WiFi
+        } else if (CFG().networkMode == 1) {
+            // WiFi mode: YES for WiFi, NO for cellular
+            if (interfaceType == 1) return YES; // WiFi
+            if (interfaceType == 2) return NO;  // Cellular
+        }
+    }
+    return orig_NWPath_usesInterfaceType ? orig_NWPath_usesInterfaceType(self, _cmd, interfaceType) : NO;
+}
+
+static int32_t (*orig_NWInterface_type)(id, SEL);
+static int32_t sc_NWInterface_type(id self, SEL _cmd) {
+    if (SC_ON() && CFG().networkMode == 2) return 2; // Cellular
+    if (SC_ON() && CFG().networkMode == 1) return 1; // WiFi
+    return orig_NWInterface_type ? orig_NWInterface_type(self, _cmd) : 0;
+}
+
+static NSString *(*orig_NWInterface_name)(id, SEL);
+static NSString *sc_NWInterface_name(id self, SEL _cmd) {
+    if (SC_ON() && CFG().networkMode == 2) return @"pdp_ip0";
+    if (SC_ON() && CFG().networkMode == 1) return @"en0";
+    return orig_NWInterface_name ? orig_NWInterface_name(self, _cmd) : nil;
+}
+
+static void SCHookNWPathIfLoaded(void) {
+    // Load Network.framework at runtime
+    dlopen("/System/Library/Frameworks/Network.framework/Network", RTLD_NOW);
+    static BOOL hooked = NO;
+    if (hooked) return;
+    hooked = YES;
+
+    Class pathCls = objc_getClass("NWPath");
+    if (pathCls) {
+        if (class_getInstanceMethod(pathCls, @selector(status))) {
+            MSHookMessageEx(pathCls, @selector(status), (IMP)sc_NWPath_status, (IMP *)&orig_NWPath_status);
+        }
+        if (class_getInstanceMethod(pathCls, @selector(isExpensive))) {
+            MSHookMessageEx(pathCls, @selector(isExpensive), (IMP)sc_NWPath_isExpensive, (IMP *)&orig_NWPath_isExpensive);
+        }
+        if (class_getInstanceMethod(pathCls, @selector(isConstrained))) {
+            MSHookMessageEx(pathCls, @selector(isConstrained), (IMP)sc_NWPath_isConstrained, (IMP *)&orig_NWPath_isConstrained);
+        }
+        if (class_getInstanceMethod(pathCls, @selector(usesInterfaceType:))) {
+            MSHookMessageEx(pathCls, @selector(usesInterfaceType:), (IMP)sc_NWPath_usesInterfaceType, (IMP *)&orig_NWPath_usesInterfaceType);
+        }
+    }
+
+    Class ifCls = objc_getClass("NWInterface");
+    if (ifCls) {
+        if (class_getInstanceMethod(ifCls, @selector(type))) {
+            MSHookMessageEx(ifCls, @selector(type), (IMP)sc_NWInterface_type, (IMP *)&orig_NWInterface_type);
+        }
+        if (class_getInstanceMethod(ifCls, @selector(name))) {
+            MSHookMessageEx(ifCls, @selector(name), (IMP)sc_NWInterface_name, (IMP *)&orig_NWInterface_name);
+        }
+    }
+}
+
+// ============================================================================
 //  7. res_query / DNS - tránh leak (DNS resolve vẫn hoạt động nhưng không lộ proxy)
 //    DNS leak chủ yếu qua getaddrinfo -> hook để không trả về interface VPN.
 //    Không can thiệp sâu ở đây, scproxyd lo phần DNS tunnel.
@@ -434,5 +526,6 @@ static void SCHookNEHotspotNetworkIfLoaded(void) {
             if (current) MSHookFunction(current, (void *)sc_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
         }
         SCHookNEHotspotNetworkIfLoaded();
+        SCHookNWPathIfLoaded();
     }
 }

@@ -933,9 +933,8 @@ static char *sc_realpath(const char *path, char *resolved) {
 }
 
 // posix_spawn — strip DYLD_INSERT_LIBRARIES from child process env
-extern int posix_spawn(pid_t *, const char *, void *, void *, char *const[], char *const[]);
-static int (*orig_posix_spawn)(pid_t *, const char *, void *, void *, char *const[], char *const[]);
-static int sc_posix_spawn(pid_t *pid, const char *path, void *file_actions, void *attrp, char *const argv[], char *const envp[]) {
+static int (*orig_posix_spawn)(pid_t *, const char *, const posix_spawn_file_actions_t *, const posix_spawnattr_t *, char *const[], char *const[]);
+static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *file_actions, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]) {
     if (SC_ON() && CFG().hideJailbreak && envp) {
         // Filter out DYLD_INSERT_LIBRARIES from envp
         NSMutableArray *newEnv = [NSMutableArray array];

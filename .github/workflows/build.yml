@@ -73,6 +73,13 @@ jobs:
           make clean
           make package FINALPACKAGE=1
 
+      - name: Inspect package contents
+        run: |
+          for deb in packages/*.deb; do
+            echo "Inspecting $deb"
+            dpkg-deb -c "$deb" | grep -E 'iOSSpoof\.app|DEBIAN/postinst|DEBIAN/postrm' || true
+          done
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

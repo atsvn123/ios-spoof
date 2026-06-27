@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>iOSSpoof</string>
     <key>CFBundleExecutable</key>
-    <string>iOSSpoofApp</string>
+    <string>iOSSpoof</string>
     <key>CFBundleIdentifier</key>
     <string>com.iosspoof.app</string>
     <key>CFBundleInfoDictionaryVersion</key>

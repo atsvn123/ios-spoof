@@ -179,7 +179,9 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
             @"me.apptapp.Installer",
             @"com.opa334.Dopamine",
             @"com.opa334.TrollStore",
-            @"com.opa334.TrollStorePersistenceHelper"
+            @"com.opa334.TrollStorePersistenceHelper",
+            @"com.apple.springboard",
+            @"com.apple.Preferences"
         ]];
     });
     if ([protectedBundles containsObject:_bundleID]) return NO;
@@ -188,6 +190,9 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
         if ([target isKindOfClass:[NSString class]] && [_bundleID isEqualToString:target]) {
             return YES;
         }
+    }
+    return NO;
+}
     }
     return NO;
 }

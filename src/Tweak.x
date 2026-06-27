@@ -412,10 +412,44 @@ static int sc_uname(struct utsname *buf) {
 //    Process không target: return ngay, không hook gì, zero overhead.
 // ============================================================================
 
+// Protected bundles: tweak sẽ KHÔNG bao giờ inject vào các app này,
+// kể cả khi user vô tình thêm vào targetBundles.
+static NSSet *sc_protected_bundles(void) {
+    static NSSet *s;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        s = [NSSet setWithArray:@[
+            @"com.iosspoof.app",
+            @"org.coolstar.SileoStore",
+            @"org.coolstar.Sileo",
+            @"com.saurik.Cydia",
+            @"xyz.willy.Zebra",
+            @"me.apptapp.Installer",
+            @"com.opa334.Dopamine",
+            @"com.opa334.TrollStore",
+            @"com.opa334.TrollStorePersistenceHelper",
+            @"com.apple.springboard",
+            @"com.apple.Preferences",
+            @"com.apple.mobilesafari",
+            @"com.apple.MobileSMS",
+            @"com.apple.mobilephone",
+            @"com.apple.mobilemail"
+        ]];
+    });
+    return s;
+}
+
 %ctor {
     @autoreleasepool {
+        // Đọc bundle ID sớm, không khởi tạo toàn bộ SCSpoofConfig
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+        
+        // Không bao giờ inject vào protected bundles
+        if ([sc_protected_bundles() containsObject:bid]) return;
+        
+        // Khởi tạo config
         [SCSpoofConfig shared];
-
+        
         // Kiểm tra: process này có nằm trong danh sách target không?
         if (![CFG() shouldInjectForCurrentBundle]) {
             return;

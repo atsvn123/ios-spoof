@@ -281,6 +281,18 @@ static CLLocation *sc_make_location() {
 
 %ctor {
     @autoreleasepool {
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+        static NSSet *protected;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            protected = [NSSet setWithArray:@[
+                @"com.iosspoof.app", @"org.coolstar.SileoStore", @"org.coolstar.Sileo",
+                @"com.saurik.Cydia", @"xyz.willy.Zebra", @"com.opa334.Dopamine",
+                @"com.opa334.TrollStore", @"com.apple.springboard", @"com.apple.Preferences"
+            ]];
+        });
+        if ([protected containsObject:bid]) return;
+        
         [SCSpoofConfig shared];
         if (![CFG() shouldInjectForCurrentBundle]) return;
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),

@@ -72,6 +72,10 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.freeStorage = d[@"freeStorage"] ? [d[@"freeStorage"] unsignedIntegerValue] : 0;
     self.lowPowerMode = d[@"lowPowerMode"] ? [d[@"lowPowerMode"] boolValue] : NO;
     self.deviceName = d[@"deviceName"] ?: @"";
+    self.bluetoothMAC = d[@"bluetoothMAC"] ?: @"";
+    self.bluetoothDeviceName = d[@"bluetoothDeviceName"] ?: @"";
+    self.bluetoothConnected = d[@"bluetoothConnected"] ? [d[@"bluetoothConnected"] boolValue] : YES;
+    self.signalStrength = d[@"signalStrength"] ? [d[@"signalStrength"] integerValue] : 4;
 }
 
 - (void)save {
@@ -119,6 +123,10 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"freeStorage"] = @(self.freeStorage);
     d[@"lowPowerMode"] = @(self.lowPowerMode);
     d[@"deviceName"] = self.deviceName ?: @"";
+    d[@"bluetoothMAC"] = self.bluetoothMAC ?: @"";
+    d[@"bluetoothDeviceName"] = self.bluetoothDeviceName ?: @"";
+    d[@"bluetoothConnected"] = @(self.bluetoothConnected);
+    d[@"signalStrength"] = @(self.signalStrength);
     [d writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }
@@ -181,6 +189,15 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     NSDictionary *iosInfo = iosVersions[iosKey];
     self.systemVersion = iosInfo[@"version"];
     self.buildID = iosInfo[@"build"];
+    // Auto Bluetooth
+    uint8_t b[6];
+    for (int j = 0; j < 6; j++) b[j] = (uint8_t)arc4random_uniform(256);
+    b[0] = (b[0] & 0xFE) | 0x02;
+    self.bluetoothMAC = [NSString stringWithFormat:@"%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]];
+    NSArray *btNames = @[@"AirPods Pro", @"AirPods Pro 2", @"AirPods Max", @"AirPods (3rd gen)", @"Powerbeats Pro", @"Beats Studio Buds"];
+    self.bluetoothDeviceName = btNames[arc4random_uniform((uint32_t)btNames.count)];
+    self.bluetoothConnected = YES;
+    self.signalStrength = 3 + arc4random_uniform(2);
     [self clearIDCache];
     [self save];
 }

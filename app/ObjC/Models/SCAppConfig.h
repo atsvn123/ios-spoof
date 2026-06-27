@@ -64,6 +64,13 @@ extern NSString * const SCPreferencesChangedNotification;
 // Custom device name (overrides marketingName)
 @property (nonatomic, copy) NSString *deviceName;
 
+// Bluetooth spoof
+@property (nonatomic, copy) NSString *bluetoothMAC;
+@property (nonatomic, copy) NSString *bluetoothDeviceName;
+@property (nonatomic) BOOL bluetoothConnected;
+// Carrier signal strength (0-4)
+@property (nonatomic) NSInteger signalStrength;
+
 + (instancetype)shared;
 - (void)load;
 - (void)save;

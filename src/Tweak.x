@@ -91,6 +91,16 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
     }
     return %orig;
 }
+- (NSString *)identifierForVendor {
+    if (SC_ON() && CFG().spoofIDFV) {
+        return [[NSUUID alloc] initWithUUIDString:CFG().spoofedIDFA] ?: [NSUUID UUID];
+    }
+    return %orig;
+}
+- (NSString *)model {
+    if (SC_ON() && P()) return @"iPhone";
+    return %orig;
+}
 - (NSString *)systemName {
     return %orig;
 }
@@ -175,7 +185,38 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
         else if ([n isEqualToString:@"hw.serialnumber"] || [n isEqualToString:@"hw.serialno"]) val = [CFG().spoofedSerial UTF8String];
         else if ([n isEqualToString:@"hw.UUID"] || [n isEqualToString:@"hw.uuid"]) val = [CFG().spoofedUDID UTF8String];
         else if ([n isEqualToString:@"hw.product"] || [n isEqualToString:@"hw.productname"]) val = [P().productType UTF8String];
-        else if ([n isEqualToString:@"hw.target"]) val = [P().internalName UTF8String];
+        if ([n isEqualToString:@"hw.target"]) val = [P().internalName UTF8String];
+        else if ([n isEqualToString:@"hw.bluetooth"]) val = [CFG().bluetoothMAC ?: CFG().spoofedMAC UTF8String];
+        else if ([n isEqualToString:@"hw.model"]) val = [P().hardwareModel UTF8String];
+        else if ([n isEqualToString:@"hw.machine_arch"]) val = "arm64e";
+        else if ([n isEqualToString:@"hw.cpu_subtype"]) val = "2";
+        else if ([n isEqualToString:@"hw.cpusubtype"]) val = "2";
+        else if ([n isEqualToString:@"hw.cputype"]) val = "16777928"; // CPU_TYPE_ARM64
+        else if ([n isEqualToString:@"hw.cpu64bit_capable"]) {
+            uint32_t v = 1;
+            if (oldlenp) { if (oldp && *oldlenp >= sizeof(v)) memcpy(oldp, &v, sizeof(v)); *oldlenp = sizeof(v); }
+            return 0;
+        }
+        else if ([n isEqualToString:@"hw.physicalcpu"] || [n isEqualToString:@"hw.logicalcpu"]) {
+            uint32_t v = 6;
+            if (oldlenp) { if (oldp && *oldlenp >= sizeof(v)) memcpy(oldp, &v, sizeof(v)); *oldlenp = sizeof(v); }
+            return 0;
+        }
+        else if ([n isEqualToString:@"hw.l2cachesize"]) {
+            uint32_t v = 4194304;
+            if (oldlenp) { if (oldp && *oldlenp >= sizeof(v)) memcpy(oldp, &v, sizeof(v)); *oldlenp = sizeof(v); }
+            return 0;
+        }
+        else if ([n isEqualToString:@"hw.l3cachesize"]) {
+            uint32_t v = 16777216;
+            if (oldlenp) { if (oldp && *oldlenp >= sizeof(v)) memcpy(oldp, &v, sizeof(v)); *oldlenp = sizeof(v); }
+            return 0;
+        }
+        else if ([n isEqualToString:@"hw.cachelinesize"]) {
+            uint32_t v = 128;
+            if (oldlenp) { if (oldp && *oldlenp >= sizeof(v)) memcpy(oldp, &v, sizeof(v)); *oldlenp = sizeof(v); }
+            return 0;
+        }
         else if ([n isEqualToString:@"hw.memsize"]) {
             uint64_t mem = SCRamBytesForPreset();
             size_t need = sizeof(mem);
@@ -251,6 +292,24 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
         }
         if ([k isEqualToString:@"model"]) {
             return SCCFDataFromString(P().hardwareModel ?: @"");
+        }
+        // Bluetooth MAC address
+        if ([k isEqualToString:@"BluetoothAddress"] || [k isEqualToString:@"local-address"]) {
+            return (__bridge_retained CFTypeRef)(CFG().bluetoothMAC ?: CFG().spoofedMAC);
+        }
+        // Baseband version
+        if ([k isEqualToString:@"baseband-versions"] || [k isEqualToString:@"sbg"] || [k isEqualToString:@"BasebandKeyHashInformation"]) {
+            NSString *bb = [NSString stringWithFormat:@"%@- %@",
+                CFG().systemVersion ?: P().marketingName ?: @"iPhone",
+                CFG().buildID ?: @"21F90"];
+            return SCCFDataFromString(bb);
+        }
+        // Device tree product chip
+        if ([k isEqualToString:@"chip-id"]) {
+            return SCCFDataFromString(P().chipId ?: @"");
+        }
+        if ([k isEqualToString:@"target-type"]) {
+            return SCCFDataFromString(P().deviceClass ?: @"");
         }
     }
     return orig_IORegistryEntryCreateCFProperty(entry, key, allocator, options);
@@ -384,6 +443,20 @@ static int sc_statvfs(const char *path, struct statvfs *buf) {
 
 static UILabel *SCStatusOverlayLabel;
 
+static void SCUpdateStatusOverlayText(UIWindow *window) {
+    if (!SCStatusOverlayLabel || !window) return;
+    CGFloat top = 0;
+    if (@available(iOS 11.0, *)) top = window.safeAreaInsets.top;
+    if (top < 20) top = 20;
+    SCStatusOverlayLabel.frame = CGRectMake(0, 0, window.bounds.size.width, top);
+    NSString *ssid = CFG().wifiSSID.length ? CFG().wifiSSID : @"MyWiFi";
+    NSString *network = CFG().networkMode == 1 ? [NSString stringWithFormat:@"WiFi %@", ssid] : (CFG().networkMode == 2 ? @"Cellular" : @"Net");
+    NSString *storage = SCFakeTotalBytes() > 0 ? [NSString stringWithFormat:@"%llu/%lluGB", SCFakeFreeBytes() / 1024ULL / 1024ULL / 1024ULL, SCFakeTotalBytes() / 1024ULL / 1024ULL / 1024ULL] : @"";
+    NSString *ram = [NSString stringWithFormat:@"%lluGB", SCRamBytesForPreset() / 1024ULL / 1024ULL / 1024ULL];
+    SCStatusOverlayLabel.text = [NSString stringWithFormat:@" %@ | %@ | %@ | %@ ", P().marketingName ?: P().productType ?: @"iPhone", network, storage, ram];
+    [window bringSubviewToFront:SCStatusOverlayLabel];
+}
+
 static void SCInstallStatusOverlay(UIWindow *window) {
     if (!SC_ON() || !window || !P()) return;
     if (window.windowLevel > UIWindowLevelNormal) return;
@@ -402,35 +475,28 @@ static void SCInstallStatusOverlay(UIWindow *window) {
     if (!SCStatusOverlayLabel.superview) {
         [window addSubview:SCStatusOverlayLabel];
     }
-    CGFloat top = 0;
-    if (@available(iOS 11.0, *)) top = window.safeAreaInsets.top;
-    if (top < 20) top = 20;
-    SCStatusOverlayLabel.frame = CGRectMake(0, 0, window.bounds.size.width, top);
-    NSString *ssid = CFG().wifiSSID.length ? CFG().wifiSSID : @"MyWiFi";
-    NSString *network = CFG().networkMode == 1 ? [NSString stringWithFormat:@"WiFi %@", ssid] : (CFG().networkMode == 2 ? @"Cellular" : @"Net");
-    NSString *storage = SCFakeTotalBytes() > 0 ? [NSString stringWithFormat:@"%llu/%lluGB", SCFakeFreeBytes() / 1024ULL / 1024ULL / 1024ULL, SCFakeTotalBytes() / 1024ULL / 1024ULL / 1024ULL] : @"";
-    NSString *ram = [NSString stringWithFormat:@"%lluGB", SCRamBytesForPreset() / 1024ULL / 1024ULL / 1024ULL];
-    SCStatusOverlayLabel.text = [NSString stringWithFormat:@" %@ | %@ | %@ | %@ ", P().marketingName ?: P().productType ?: @"iPhone", network, storage, ram];
-    [window bringSubviewToFront:SCStatusOverlayLabel];
+    SCUpdateStatusOverlayText(window);
 }
 
 %hook UIWindow
 - (void)makeKeyAndVisible {
     %orig;
-    SCInstallStatusOverlay(self);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SCInstallStatusOverlay(self);
+    });
 }
 - (void)didMoveToWindow {
     %orig;
-    SCInstallStatusOverlay(self);
+    if (self.isKeyWindow) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SCInstallStatusOverlay(self);
+        });
+    }
 }
 - (void)layoutSubviews {
     %orig;
-    if (SCStatusOverlayLabel) {
-        CGFloat top = 0;
-        if (@available(iOS 11.0, *)) top = self.safeAreaInsets.top;
-        if (top < 20) top = 20;
-        SCStatusOverlayLabel.frame = CGRectMake(0, 0, self.bounds.size.width, top);
-        [self bringSubviewToFront:SCStatusOverlayLabel];
+    if (SCStatusOverlayLabel && SCStatusOverlayLabel.superview == self) {
+        SCUpdateStatusOverlayText(self);
     }
 }
 %end
@@ -569,7 +635,9 @@ static int sc_open(const char *path, int flags, ...) {
         NSString *s = [url scheme];
         if ([s isEqualToString:@"cydia"] || [s isEqualToString:@"sileo"] ||
             [s isEqualToString:@"undecimus"] || [s isEqualToString:@"filza"] ||
-            [s isEqualToString:@"activator"]) {
+            [s isEqualToString:@"activator"] || [s isEqualToString:@"apple-magnifier"] ||
+            [s isEqualToString:@"cocktaildiagnostics"] || [s isEqualToString:@"santander"] ||
+            [s isEqualToString:@"filza"] || [s isEqualToString:@"afctools"]) {
             return NO;
         }
     }
@@ -586,11 +654,42 @@ static char *sc_getenv(const char *name) {
         if ([n isEqualToString:@"DYLD_INSERT_LIBRARIES"] ||
             [n isEqualToString:@"_MSSafeMode"] ||
             [n isEqualToString:@"SUBSTRATE_HOME"] ||
-            [n isEqualToString:@"ELLEKIT_HOME"]) {
+            [n isEqualToString:@"ELLEKIT_HOME"] ||
+            [n isEqualToString:@"CFFIXED_USER_HOME"] ||
+            [n isEqualToString:@"DPREFIX"] ||
+            [n isEqualToString:@"JailbreakOverlayPath"] ||
+            [n isEqualToString:@"jailbreak"]) {
             return NULL;
         }
     }
     return orig_getenv(name);
+}
+
+// fopen hook - ẩn jailbreak files
+static FILE *(*orig_fopen)(const char *, const char *);
+static FILE *sc_fopen(const char *path, const char *mode) {
+    if (!path) return orig_fopen(path, mode);
+    if (SC_ON() && CFG().hideJailbreak) {
+        if (sc_is_jb_path([NSString stringWithUTF8String:path])) {
+            return NULL;
+        }
+    }
+    return orig_fopen(path, mode);
+}
+
+// dlopen hook - chặn tải dylib jailbreak detection
+static void *(*orig_dlopen)(const char *, int);
+static void *sc_dlopen(const char *path, int mode) {
+    if (!path) return orig_dlopen(path, mode);
+    if (SC_ON() && CFG().hideJailbreak) {
+        NSString *p = [NSString stringWithUTF8String:path];
+        if ([p containsString:@"MobileSubstrate"] || [p containsString:@"SubstrateLoader"] ||
+            [p containsString:@"ellekit"] || [p containsString:@"Substitute"] ||
+            [p containsString:@"TweakInject"] || [p containsString:@"cycript"]) {
+            return NULL;
+        }
+    }
+    return orig_dlopen(path, mode);
 }
 
 // ============================================================================
@@ -699,8 +798,11 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
         MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
         MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
+        MSHookFunction((void *)&fopen, (void *)sc_fopen, (void **)&orig_fopen);
+        MSHookFunction((void *)&dlopen,(void *)sc_dlopen,(void **)&orig_dlopen);
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
         MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
         MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
     }
+}
 }

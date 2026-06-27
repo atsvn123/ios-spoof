@@ -122,7 +122,7 @@
 
 #pragma mark - Table
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 6; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 7; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
@@ -132,6 +132,7 @@
         case 3: return 1 + 5;
         case 4: return 5;
         case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
+        case 6: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
         default: return 0;
     }
 }
@@ -142,7 +143,7 @@
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    return @[@"Network Mode", @"Proxy", @"GPS Location", @"Carrier", @"Anti-Detect", @"System & Storage"][s];
+    return @[@"Network Mode", @"Proxy", @"GPS Location", @"Carrier", @"Anti-Detect", @"System & Storage", @"Bluetooth & Signal"][s];
 }
 
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
@@ -163,6 +164,7 @@
         case 3: return i.row == 0 ? [self carrierPresetCell] : [self carrierCell:i];
         case 4: return [self antiDetectCell:i];
         case 5: return [self systemCell:i];
+        case 6: return [self bluetoothCell:i];
     }
     return [self cellWithTitle:@"" detail:@""];
 }
@@ -326,6 +328,9 @@
     if (i.section == 3 && i.row == 0) { [self showCarrierPresets]; return; }
     if (i.section == 0 && i.row == 3) { [self randomBSSID]; return; }
     if (i.section == 5) { [self showSystemPicker:i.row]; return; }
+    if (i.section == 6 && i.row == 0) { [self randomBluetoothMAC]; return; }
+    if (i.section == 6 && i.row == 1) { [self randomBluetoothDevice]; return; }
+    if (i.section == 6 && i.row == 3) { [self showSignalPicker]; return; }
 }
 
 - (void)randomBSSID {
@@ -336,6 +341,46 @@
     self.config.wifiBSSID = [NSString stringWithFormat:@"%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]];
     [self.config save];
     [self.tableView reloadData];
+}
+
+- (void)randomBluetoothMAC {
+    // Apple Bluetooth MAC: use OUI-like first 3 bytes, locally administered
+    uint8_t b[6];
+    for (int j = 0; j < 6; j++) b[j] = (uint8_t)arc4random_uniform(256);
+    b[0] = (b[0] & 0xFE) | 0x02; // locally administered
+    self.config.bluetoothMAC = [NSString stringWithFormat:@"%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]];
+    [self.config save];
+    [self.tableView reloadData];
+}
+
+- (void)randomBluetoothDevice {
+    NSArray *names = @[
+        @"AirPods Pro", @"AirPods Pro 2", @"AirPods Max", @"AirPods (3rd gen)",
+        @"Powerbeats Pro", @"Beats Studio Buds", @"Beats Fit Pro",
+        @"JBL Flip 6", @"JBL Charge 5", @"Sony WH-1000XM5", @"Bose QuietComfort",
+        @"Galaxy Buds Pro", @"Pixel Buds Pro"
+    ];
+    self.config.bluetoothDeviceName = names[arc4random_uniform((uint32_t)names.count)];
+    [self.config save];
+    [self.tableView reloadData];
+}
+
+- (void)showSignalPicker {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Signal Strength" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSInteger bars = 0; bars <= 4; bars++) {
+        NSString *title = [NSString stringWithFormat:@"%ld bars%@", (long)bars, bars == 4 ? @" (Full)" : @""];
+        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            self.config.signalStrength = bars;
+            [self.config save];
+            [self.tableView reloadData];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        alert.popoverPresentationController.sourceView = self.view;
+        alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+    }
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)showCarrierPresets {
@@ -514,6 +559,41 @@
     }] resume];
 }
 
+#pragma mark - Bluetooth & Signal
+
+- (UITableViewCell *)bluetoothCell:(NSIndexPath *)i {
+    switch (i.row) {
+        case 0: {
+            UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+            c.textLabel.text = @"BT MAC Address";
+            c.detailTextLabel.text = self.config.bluetoothMAC.length ? self.config.bluetoothMAC : @"Auto";
+            c.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+        case 1: {
+            UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+            c.textLabel.text = @"BT Device Name";
+            c.detailTextLabel.text = self.config.bluetoothDeviceName.length ? self.config.bluetoothDeviceName : @"Tap to random";
+            c.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+        case 2: return [self switchCellWithTitle:@"BT Connected" on:self.config.bluetoothConnected action:@selector(toggleBTConnected:)];
+        case 3: {
+            UITableViewCell *c = [self cellWithTitle:@"Signal Strength" detail:[NSString stringWithFormat:@"%ld bars", (long)self.config.signalStrength]];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+    }
+    return [self cellWithTitle:@"" detail:@""];
+}
+
+- (void)toggleBTConnected:(UISwitch *)s { self.config.bluetoothConnected = s.on; [self.config save]; }
+
 #pragma mark - Anti-Detect
 
 - (UITableViewCell *)antiDetectCell:(NSIndexPath *)i {
@@ -544,6 +624,7 @@
                 case 6: if (t.tag==601) self.config.proxyType=t.text; if (t.tag==602) self.config.proxyHost=t.text; if (t.tag==603) self.config.proxyPort=t.text.integerValue; if (t.tag==604) self.config.proxyUser=t.text; if (t.tag==605) self.config.proxyPass=t.text; break;
                 case 7: if (t.tag==702) self.config.latitude=t.text.doubleValue; if (t.tag==703) self.config.longitude=t.text.doubleValue; if (t.tag==704) self.config.altitude=t.text.doubleValue; if (t.tag==705) self.config.horizontalAccuracy=t.text.doubleValue; if (t.tag==706) self.config.heading=t.text.doubleValue; break;
                 case 8: if (t.tag==800) self.config.carrierName=t.text; if (t.tag==801) self.config.carrierMCC=t.text; if (t.tag==802) self.config.carrierMNC=t.text; if (t.tag==803) self.config.carrierISO=t.text; if (t.tag==804) self.config.radioTech=t.text; break;
+                case 10: if (t.tag==1000) self.config.bluetoothMAC=t.text; if (t.tag==1001) self.config.bluetoothDeviceName=t.text; break;
             }
         }
     }

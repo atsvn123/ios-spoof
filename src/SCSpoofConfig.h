@@ -74,6 +74,13 @@
 @property (nonatomic, readonly) NSString *uniqueID;
 @property (nonatomic, readonly) NSString *deviceName;
 
+// Bluetooth
+@property (nonatomic, readonly) NSString *bluetoothMAC;
+@property (nonatomic, readonly) NSString *bluetoothDeviceName;
+@property (nonatomic, readonly) BOOL bluetoothConnected;
+// Carrier signal strength (0-4 bars)
+@property (nonatomic, readonly) NSInteger signalStrength;
+
 /** Danh sách bundle ID mục tiêu. Nếu rỗng = không inject vào app nào. */
 @property (nonatomic, readonly) NSArray *targetBundles;
 

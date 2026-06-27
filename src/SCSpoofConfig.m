@@ -7,7 +7,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 #define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
-@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; }
+@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; }
 @end
 
 @implementation SCSpoofConfig
@@ -81,6 +81,10 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _buildID = SC_READ_STR(@"buildID");
     _uniqueID = SC_READ_STR(@"uniqueID");
     _deviceName = SC_READ_STR(@"deviceName");
+    _bluetoothMAC = SC_READ_STR(@"bluetoothMAC") ?: _mac;
+    _bluetoothDeviceName = SC_READ_STR(@"bluetoothDeviceName");
+    _bluetoothConnected = SC_READ_BOOL_DEF(@"bluetoothConnected", YES);
+    _signalStrength = d[@"signalStrength"] ? [d[@"signalStrength"] integerValue] : 4;
 
     id tb = d[@"targetBundles"];
     if ([tb isKindOfClass:[NSArray class]]) {
@@ -216,5 +220,9 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (NSString *)buildID { return _buildID; }
 - (NSString *)uniqueID { return _uniqueID; }
 - (NSString *)deviceName { return _deviceName; }
+- (NSString *)bluetoothMAC { return _bluetoothMAC; }
+- (NSString *)bluetoothDeviceName { return _bluetoothDeviceName; }
+- (BOOL)bluetoothConnected { return _bluetoothConnected; }
+- (NSInteger)signalStrength { return _signalStrength; }
 
 @end

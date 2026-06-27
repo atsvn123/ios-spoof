@@ -135,6 +135,26 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 %end
 
 // ============================================================================
+//  1b. Signal strength + baseband version
+// ============================================================================
+
+@interface CTTelephonyNetworkInfo ()
+- (NSInteger)signalStrengthBars;
+@end
+
+%hook CTTelephonyNetworkInfo
+- (NSInteger)signalStrengthBars {
+    if (SC_ON()) {
+        NSInteger bars = CFG().signalStrength;
+        if (bars < 0) bars = 0;
+        if (bars > 4) bars = 4;
+        return bars;
+    }
+    return %orig;
+}
+%end
+
+// ============================================================================
 //  2. CFNetwork - ẩn proxy system
 // ============================================================================
 

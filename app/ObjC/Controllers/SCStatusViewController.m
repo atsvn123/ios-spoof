@@ -29,7 +29,7 @@
     return total > 0 ? total / 3 : 0;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 7; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 8; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
@@ -39,13 +39,14 @@
         case 3: return 6;  // GPS
         case 4: return 3;  // Network mode
         case 5: return 9;  // System spoof
-        case 6: return 2;  // Actions
+        case 6: return 4;  // Bluetooth & Signal
+        case 7: return 2;  // Actions
         default: return 0;
     }
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    return @[@"Trạng thái", @"Thiết bị đang spoof", @"Carrier", @"GPS", @"Network Mode", @"System & IDs", @"Actions"][s];
+    return @[@"Trạng thái", @"Thiết bị đang spoof", @"Carrier", @"GPS", @"Network Mode", @"System & IDs", @"Bluetooth & Signal", @"Actions"][s];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)i {
@@ -97,6 +98,14 @@
             }
         }
         case 6: {
+            switch (i.row) {
+                case 0: return [self cellWithTitle:@"BT MAC" detail:self.config.bluetoothMAC.length ? self.config.bluetoothMAC : @"Auto"];
+                case 1: return [self cellWithTitle:@"BT Device" detail:self.config.bluetoothDeviceName.length ? self.config.bluetoothDeviceName : @"None"];
+                case 2: return [self cellWithTitle:@"BT Connected" detail:self.config.bluetoothConnected ? @"Bật" : @"Tắt"];
+                case 3: return [self cellWithTitle:@"Signal" detail:[NSString stringWithFormat:@"%ld bars", (long)self.config.signalStrength]];
+            }
+        }
+        case 7: {
             UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
             if (i.row == 0) {
                 cell.textLabel.text = @"Randomize All";
@@ -116,7 +125,7 @@
 
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)i {
     [t deselectRowAtIndexPath:i animated:YES];
-    if (i.section == 6 && i.row == 0) { [self.config randomizeAll]; [t reloadData]; }
+    if (i.section == 7 && i.row == 0) { [self.config randomizeAll]; [t reloadData]; }
 }
 
 - (void)toggleEnabled:(UISwitch *)sw { self.config.enabled = sw.on; [self.config save]; }

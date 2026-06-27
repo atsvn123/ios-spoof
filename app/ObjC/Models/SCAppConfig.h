@@ -37,11 +37,26 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic) BOOL spoofIDFV;
 @property (nonatomic) BOOL spoofBattery;
 
+// Network mode: 0=default, 1=wifi, 2=cellular
+@property (nonatomic) NSInteger networkMode;
+// Virtual WiFi BSSID/SSID
+@property (nonatomic, copy) NSString *wifiSSID;
+@property (nonatomic, copy) NSString *wifiBSSID;
+// Phone number spoof
+@property (nonatomic, copy) NSString *phoneNumber;
+// Geo from IP
+@property (nonatomic) BOOL geoFromIP;
+// IP geo cached data
+@property (nonatomic, copy) NSString *geoIPCity;
+@property (nonatomic, copy) NSString *geoIPCountry;
+@property (nonatomic, copy) NSString *geoIPIsp;
+
 + (instancetype)shared;
 - (void)load;
 - (void)save;
 - (void)resetAll;
 - (void)randomizeAll;
+- (void)fetchGeoFromIP;
 - (NSDictionary *)resolvedPreset;
 - (NSDictionary *)cachedIDsForBundle:(NSString *)bundleID;
 - (void)clearIDCache;

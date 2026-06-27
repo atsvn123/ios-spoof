@@ -2,9 +2,7 @@
 #import "Controllers/SCStatusViewController.h"
 #import "Controllers/SCDeviceViewController.h"
 #import "Controllers/SCAppsViewController.h"
-#import "Controllers/SCNetworkViewController.h"
-#import "Controllers/SCGPSViewController.h"
-#import "Controllers/SCCellularViewController.h"
+#import "Controllers/SCSpoofViewController.h"
 #import "Controllers/SCHardwareViewController.h"
 
 static UINavigationController *SCNav(UIViewController *vc, NSString *title, NSString *imageName) {
@@ -26,9 +24,7 @@ static UINavigationController *SCNav(UIViewController *vc, NSString *title, NSSt
             SCNav([SCStatusViewController new], @"Status", @"shield.lefthalf.fill"),
             SCNav([SCDeviceViewController new], @"Device", @"iphone"),
             SCNav([SCAppsViewController new], @"Apps", @"app.badge"),
-            SCNav([SCNetworkViewController new], @"Network", @"network"),
-            SCNav([SCGPSViewController new], @"GPS", @"location.fill"),
-            SCNav([SCCellularViewController new], @"Cellular", @"antenna.radiowaves.left.and.right"),
+            SCNav([SCSpoofViewController new], @"Spoof", @"gearshape"),
             SCNav([SCHardwareViewController new], @"Hardware", @"cpu")
         ];
     }

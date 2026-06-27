@@ -57,6 +57,14 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.spoofIDFA = d[@"spoofIDFA"] ? [d[@"spoofIDFA"] boolValue] : YES;
     self.spoofIDFV = d[@"spoofIDFV"] ? [d[@"spoofIDFV"] boolValue] : YES;
     self.spoofBattery = d[@"spoofBattery"] ? [d[@"spoofBattery"] boolValue] : YES;
+    self.networkMode = d[@"networkMode"] ? [d[@"networkMode"] integerValue] : 0;
+    self.wifiSSID = d[@"wifiSSID"] ?: @"MyWiFi";
+    self.wifiBSSID = d[@"wifiBSSID"] ?: @"02:00:00:00:00:00";
+    self.phoneNumber = d[@"phoneNumber"] ?: @"";
+    self.geoFromIP = d[@"geoFromIP"] ? [d[@"geoFromIP"] boolValue] : NO;
+    self.geoIPCity = d[@"geoIPCity"] ?: @"";
+    self.geoIPCountry = d[@"geoIPCountry"] ?: @"";
+    self.geoIPIsp = d[@"geoIPIsp"] ?: @"";
 }
 
 - (void)save {
@@ -89,6 +97,14 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"spoofIDFA"] = @(self.spoofIDFA);
     d[@"spoofIDFV"] = @(self.spoofIDFV);
     d[@"spoofBattery"] = @(self.spoofBattery);
+    d[@"networkMode"] = @(self.networkMode);
+    d[@"wifiSSID"] = self.wifiSSID ?: @"MyWiFi";
+    d[@"wifiBSSID"] = self.wifiBSSID ?: @"02:00:00:00:00:00";
+    d[@"phoneNumber"] = self.phoneNumber ?: @"";
+    d[@"geoFromIP"] = @(self.geoFromIP);
+    d[@"geoIPCity"] = self.geoIPCity ?: @"";
+    d[@"geoIPCountry"] = self.geoIPCountry ?: @"";
+    d[@"geoIPIsp"] = self.geoIPIsp ?: @"";
     [d writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }
@@ -142,6 +158,34 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.spoofIDFA = self.spoofIDFV = self.spoofBattery = YES;
     [self clearIDCache];
     [self save];
+}
+
+- (void)fetchGeoFromIP {
+    NSURLSession *session = [NSURLSession sharedSession];
+    NSURL *url = [NSURL URLWithString:@"https://ipwho.is/"];
+    NSURLSessionDataTask *task = [session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (!data) return;
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![json[@"success"] boolValue]) return;
+        double lat = [json[@"latitude"] doubleValue];
+        double lon = [json[@"longitude"] doubleValue];
+        NSString *city = json[@"city"] ?: @"";
+        NSString *country = json[@"country"] ?: @"";
+        NSString *isp = json[@"connection"][@"isp"] ?: @"";
+        NSString *callingCode = json[@"calling_code"] ?: @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.latitude = lat;
+            self.longitude = lon;
+            self.geoIPCity = city;
+            self.geoIPCountry = country;
+            self.geoIPIsp = isp;
+            if (callingCode.length > 0) {
+                self.carrierISO = [json[@"country_code"] lowercaseString] ?: self.carrierISO;
+            }
+            [self save];
+        });
+    }];
+    [task resume];
 }
 
 @end

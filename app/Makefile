@@ -16,9 +16,7 @@ iOSSpoof_FILES = \
 	ObjC/Controllers/SCStatusViewController.m \
 	ObjC/Controllers/SCDeviceViewController.m \
 	ObjC/Controllers/SCAppsViewController.m \
-	ObjC/Controllers/SCNetworkViewController.m \
-	ObjC/Controllers/SCGPSViewController.m \
-	ObjC/Controllers/SCCellularViewController.m \
+	ObjC/Controllers/SCSpoofViewController.m \
 	ObjC/Controllers/SCHardwareViewController.m
 
 iOSSpoof_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-arc-performSelector-leaks

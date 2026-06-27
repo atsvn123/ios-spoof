@@ -94,33 +94,11 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
 %end
 
 // ============================================================================
-//  2. UIScreen - resolution / scale
+//  2. UIScreen - DISABLED to avoid crashing target apps
+//    UIScreen bounds/scale spoofing is too invasive; changing resolution
+//    at runtime can crash apps that cache screen geometry early.
 // ============================================================================
-%hook UIScreen
-
-- (CGRect)bounds {
-    if (SC_ON() && P()) {
-        CGFloat scale = MAX((CGFloat)P().screenScale, 1.0);
-        return CGRectMake(0, 0, P().screenWidth / scale, P().screenHeight / scale);
-    }
-    return %orig;
-}
-- (CGFloat)scale {
-    if (SC_ON() && P()) return (CGFloat)P().screenScale;
-    return %orig;
-}
-- (CGFloat)nativeScale {
-    if (SC_ON() && P()) return (CGFloat)P().screenScale;
-    return %orig;
-}
-- (CGSize)nativeBounds {
-    if (SC_ON() && P()) {
-        return CGSizeMake(P().screenWidth, P().screenHeight);
-    }
-    return %orig;
-}
-
-%end
+// (hooks removed)
 
 // ============================================================================
 //  3. sysctlbyname / sysctl
@@ -132,68 +110,19 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
     if (!name) return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
     if (SC_ON() && P()) {
         NSString *n = [NSString stringWithUTF8String:name];
-        if ([n isEqualToString:@"hw.machine"]) {
-            const char *val = [P().productType UTF8String];
+        const char *val = NULL;
+        if ([n isEqualToString:@"hw.machine"]) val = [P().productType UTF8String];
+        else if ([n isEqualToString:@"hw.model"]) val = [P().hardwareModel UTF8String];
+        else if ([n isEqualToString:@"hw.serialnumber"] || [n isEqualToString:@"hw.serialno"]) val = [CFG().spoofedSerial UTF8String];
+        else if ([n isEqualToString:@"hw.UUID"] || [n isEqualToString:@"hw.uuid"]) val = [CFG().spoofedUDID UTF8String];
+        else if ([n isEqualToString:@"hw.product"] || [n isEqualToString:@"hw.productname"]) val = [P().productType UTF8String];
+        else if ([n isEqualToString:@"hw.target"]) val = [P().internalName UTF8String];
+        if (val) {
             size_t need = strlen(val) + 1;
-            if (oldp && oldlenp) {
-                if (*oldlenp >= need) { memcpy(oldp, val, need); }
-                *oldlenp = need;
-            } else if (oldlenp) {
-                *oldlenp = need;
-            }
-            return 0;
-        }
-        if ([n isEqualToString:@"hw.model"]) {
-            const char *val = [P().hardwareModel UTF8String];
-            size_t need = strlen(val) + 1;
-            if (oldp && oldlenp) {
-                if (*oldlenp >= need) memcpy(oldp, val, need);
-                *oldlenp = need;
-            } else if (oldlenp) {
-                *oldlenp = need;
-            }
-            return 0;
-        }
-        if ([n isEqualToString:@"hw.serialnumber"] || [n isEqualToString:@"hw.serialno"]) {
-            const char *val = [CFG().spoofedSerial UTF8String];
-            size_t need = strlen(val) + 1;
-            if (oldp && oldlenp) {
-                if (*oldlenp >= need) memcpy(oldp, val, need);
-                *oldlenp = need;
-            } else if (oldlenp) {
-                *oldlenp = need;
-            }
-            return 0;
-        }
-        if ([n isEqualToString:@"hw.UUID"] || [n isEqualToString:@"hw.uuid"]) {
-            const char *val = [CFG().spoofedUDID UTF8String];
-            size_t need = strlen(val) + 1;
-            if (oldp && oldlenp) {
-                if (*oldlenp >= need) memcpy(oldp, val, need);
-                *oldlenp = need;
-            } else if (oldlenp) {
-                *oldlenp = need;
-            }
-            return 0;
-        }
-        if ([n isEqualToString:@"hw.product"] || [n isEqualToString:@"hw.productname"]) {
-            const char *val = [P().productType UTF8String];
-            size_t need = strlen(val) + 1;
-            if (oldp && oldlenp) {
-                if (*oldlenp >= need) memcpy(oldp, val, need);
-                *oldlenp = need;
-            } else if (oldlenp) {
-                *oldlenp = need;
-            }
-            return 0;
-        }
-        if ([n isEqualToString:@"hw.target"]) {
-            const char *val = [P().internalName UTF8String];
-            size_t need = strlen(val) + 1;
-            if (oldp && oldlenp) {
-                if (*oldlenp >= need) memcpy(oldp, val, need);
-                *oldlenp = need;
-            } else if (oldlenp) {
+            if (oldlenp) {
+                if (oldp && *oldlenp >= need) {
+                    memcpy(oldp, val, need);
+                }
                 *oldlenp = need;
             }
             return 0;
@@ -333,22 +262,8 @@ static int sc_lstat(const char *path, struct stat *buf) {
     return orig_lstat(path, buf);
 }
 
-static int (*orig_open)(const char *, int, ...);
-static int sc_open(const char *path, int flags, ...) {
-    mode_t mode = 0;
-    if (flags & O_CREAT) {
-        va_list ap; va_start(ap, flags);
-        mode = va_arg(ap, int); va_end(ap);
-    }
-    if (!path) return orig_open(path, flags, mode);
-    if (SC_ON() && CFG().hideJailbreak) {
-        if (sc_is_jb_path([NSString stringWithUTF8String:path])) {
-            errno = ENOENT;
-            return -1;
-        }
-    }
-    return orig_open(path, flags, mode);
-}
+// NOTE: open() hook removed - too invasive, can crash target apps
+// that need to read files from jailbreak paths internally.
 
 // Hook canOpenURL cho scheme cydia://, sileo://
 %hook UIApplication
@@ -484,7 +399,7 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&access, (void *)sc_access, (void **)&orig_access);
         MSHookFunction((void *)&stat,  (void *)sc_stat,  (void **)&orig_stat);
         MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
-        MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
+        // open() hook removed - too invasive
         MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
     }

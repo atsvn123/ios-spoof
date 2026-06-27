@@ -33,16 +33,6 @@
 - (NSString *)dataServiceIdentifier;
 @end
 
-typedef NS_ENUM(NSInteger, CTCellularDataRestrictedState) {
-    kCTCellularDataRestrictedStateUnknown = 0,
-    kCTCellularDataRestricted = 1,
-    kCTCellularDataNotRestricted = 2,
-};
-
-@interface CTCellularData : NSObject
-- (CTCellularDataRestrictedState)restrictedState;
-@end
-
 @interface NEHotspotNetwork : NSObject
 - (NSString *)SSID;
 - (NSString *)BSSID;
@@ -144,13 +134,6 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 }
 %end
 
-%hook CTCellularData
-- (CTCellularDataRestrictedState)restrictedState {
-    if (SC_ON() && CFG().networkMode == 2) return kCTCellularDataNotRestricted;
-    return %orig;
-}
-%end
-
 // ============================================================================
 //  2. CFNetwork - ẩn proxy system
 // ============================================================================
@@ -181,36 +164,8 @@ CFArrayRef sc_CFNetworkCopyProxiesForURL(CFURLRef url, CFDictionaryRef settings)
 
 CFPropertyListRef (*orig_SCDynamicStoreCopyValue)(SCDynamicStoreRef, CFStringRef);
 CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key) {
-    if (SC_ON() && key) {
+    if (SC_ON() && CFG().hideProxy && key) {
         NSString *k = (__bridge NSString *)key;
-        if (CFG().networkMode == 2) {
-            if ([k containsString:@"AirPort"] || [k containsString:@"Wi-Fi"] || [k containsString:@"en0"]) {
-                return NULL;
-            }
-            if ([k isEqualToString:@"State:/Network/Global/IPv4"] || [k isEqualToString:@"State:/Network/Global/IPv6"]) {
-                return (__bridge_retained CFDictionaryRef)@{
-                    @"PrimaryInterface": @"pdp_ip0",
-                    @"PrimaryService": @"com.apple.mobile-data"
-                };
-            }
-        } else if (CFG().networkMode == 1) {
-            if ([k isEqualToString:@"State:/Network/Global/IPv4"] || [k isEqualToString:@"State:/Network/Global/IPv6"]) {
-                return (__bridge_retained CFDictionaryRef)@{
-                    @"PrimaryInterface": @"en0",
-                    @"PrimaryService": @"com.apple.wifi"
-                };
-            }
-            if ([k containsString:@"AirPort"] || [k containsString:@"Wi-Fi"] || [k containsString:@"en0"]) {
-                return (__bridge_retained CFDictionaryRef)@{
-                    @"SSID_STR": SCFakeSSID(),
-                    @"SSID": SCFakeSSID(),
-                    @"BSSID": SCFakeBSSID(),
-                    @"Power Status": @"On"
-                };
-            }
-        }
-
-        if (!CFG().hideProxy) return orig_SCDynamicStoreCopyValue(store, key);
         // ẩn HTTP proxy, HTTPS proxy, SOCKS, auto proxy
         if ([k containsString:@"Proxy"] || [k containsString:@"proxy"] ||
             [k containsString:@"HTTPProxy"] || [k containsString:@"HTTPSProxy"] ||
@@ -252,24 +207,25 @@ int (*orig_getifaddrs)(struct ifaddrs **);
 int sc_getifaddrs(struct ifaddrs **ifap) {
     int r = orig_getifaddrs(ifap);
     if (r != 0 || !ifap || !*ifap) return r;
-    if (!SC_ON()) return r;
 
-    if (CFG().networkMode == 2 || CFG().networkMode == 1) {
+    if (SC_ON() && (CFG().networkMode == 1 || CFG().networkMode == 2)) {
         struct ifaddrs *net = *ifap;
         while (net) {
             if (net->ifa_name) {
                 NSString *name = [NSString stringWithUTF8String:net->ifa_name];
-                if (CFG().networkMode == 2 && [name isEqualToString:@"en0"]) {
-                    strlcpy(net->ifa_name, "pdp_ip0", IFNAMSIZ);
-                } else if (CFG().networkMode == 1 && [name hasPrefix:@"pdp_ip"]) {
-                    strlcpy(net->ifa_name, "en0", IFNAMSIZ);
+                if (CFG().networkMode == 2) {
+                    if ([name isEqualToString:@"en0"]) net->ifa_flags &= ~(IFF_UP | IFF_RUNNING);
+                    if ([name hasPrefix:@"pdp_ip"]) net->ifa_flags |= (IFF_UP | IFF_RUNNING);
+                } else if (CFG().networkMode == 1) {
+                    if ([name isEqualToString:@"en0"]) net->ifa_flags |= (IFF_UP | IFF_RUNNING);
+                    if ([name hasPrefix:@"pdp_ip"]) net->ifa_flags &= ~(IFF_UP | IFF_RUNNING);
                 }
             }
             net = net->ifa_next;
         }
     }
 
-    if (!CFG().hideVPN) return r;
+    if (!SC_ON() || !CFG().hideVPN) return r;
 
     // Danh sách prefix interface cần ẩn
     NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif",
@@ -298,11 +254,6 @@ int sc_getifaddrs(struct ifaddrs **ifap) {
 
 unsigned int (*orig_if_nametoindex)(const char *);
 unsigned int sc_if_nametoindex(const char *ifname) {
-    if (SC_ON() && ifname) {
-        NSString *n = [NSString stringWithUTF8String:ifname];
-        if (CFG().networkMode == 2 && [n isEqualToString:@"en0"]) return 0;
-        if (CFG().networkMode == 1 && [n hasPrefix:@"pdp_ip"]) return 0;
-    }
     if (SC_ON() && CFG().hideVPN && ifname) {
         NSString *n = [NSString stringWithUTF8String:ifname];
         NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif"];
@@ -316,17 +267,6 @@ unsigned int sc_if_nametoindex(const char *ifname) {
 char *(*orig_if_indextoname)(unsigned int, char *);
 char *sc_if_indextoname(unsigned int ifindex, char *ifname) {
     char *r = orig_if_indextoname(ifindex, ifname);
-    if (r && SC_ON()) {
-        NSString *n = [NSString stringWithUTF8String:r];
-        if (CFG().networkMode == 2 && [n isEqualToString:@"en0"]) {
-            strlcpy(ifname, "pdp_ip0", IFNAMSIZ);
-            return ifname;
-        }
-        if (CFG().networkMode == 1 && [n hasPrefix:@"pdp_ip"]) {
-            strlcpy(ifname, "en0", IFNAMSIZ);
-            return ifname;
-        }
-    }
     if (r && SC_ON() && CFG().hideVPN) {
         NSString *n = [NSString stringWithUTF8String:r];
         NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif"];
@@ -363,7 +303,7 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
 }
 
 // ============================================================================
-//  6b. CaptiveNetwork / NEHotspotNetwork - fake WiFi SSID/BSSID or hide WiFi
+//  6b. CaptiveNetwork - fake WiFi SSID/BSSID or hide WiFi
 // ============================================================================
 
 CFArrayRef (*orig_CNCopySupportedInterfaces)(void);
@@ -405,48 +345,27 @@ CFDictionaryRef sc_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
 
 static NSString *(*orig_NEHotspotNetwork_SSID)(id, SEL);
 static NSString *sc_NEHotspotNetwork_SSID(id self, SEL _cmd) {
-    if (SC_ON()) {
-        if (CFG().networkMode == 1) return SCFakeSSID();
-        if (CFG().networkMode == 2) return nil;
-    }
+    if (SC_ON() && CFG().networkMode == 1) return SCFakeSSID();
     return orig_NEHotspotNetwork_SSID ? orig_NEHotspotNetwork_SSID(self, _cmd) : nil;
 }
 
 static NSString *(*orig_NEHotspotNetwork_BSSID)(id, SEL);
 static NSString *sc_NEHotspotNetwork_BSSID(id self, SEL _cmd) {
-    if (SC_ON()) {
-        if (CFG().networkMode == 1) return SCFakeBSSID();
-        if (CFG().networkMode == 2) return nil;
-    }
+    if (SC_ON() && CFG().networkMode == 1) return SCFakeBSSID();
     return orig_NEHotspotNetwork_BSSID ? orig_NEHotspotNetwork_BSSID(self, _cmd) : nil;
 }
 
-static void (*orig_NEHotspotNetwork_fetchCurrent)(Class, SEL, void (^)(id));
-static void sc_NEHotspotNetwork_fetchCurrent(Class cls, SEL _cmd, void (^completion)(id)) {
-    if (SC_ON() && CFG().networkMode == 2) {
-        if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(nil); });
-        return;
-    }
-    if (orig_NEHotspotNetwork_fetchCurrent) {
-        orig_NEHotspotNetwork_fetchCurrent(cls, _cmd, completion);
-    } else if (completion) {
-        completion(nil);
-    }
-}
-
-static void SCHookNEHotspotNetwork(void) {
+static void SCHookNEHotspotNetworkIfLoaded(void) {
     Class cls = objc_getClass("NEHotspotNetwork");
     if (!cls) return;
+    static BOOL hooked = NO;
+    if (hooked) return;
+    hooked = YES;
     if (class_getInstanceMethod(cls, @selector(SSID))) {
         MSHookMessageEx(cls, @selector(SSID), (IMP)sc_NEHotspotNetwork_SSID, (IMP *)&orig_NEHotspotNetwork_SSID);
     }
     if (class_getInstanceMethod(cls, @selector(BSSID))) {
         MSHookMessageEx(cls, @selector(BSSID), (IMP)sc_NEHotspotNetwork_BSSID, (IMP *)&orig_NEHotspotNetwork_BSSID);
-    }
-    Class meta = object_getClass(cls);
-    SEL fetchSel = @selector(fetchCurrentWithCompletionHandler:);
-    if (meta && class_getClassMethod(cls, fetchSel)) {
-        MSHookMessageEx(meta, fetchSel, (IMP)sc_NEHotspotNetwork_fetchCurrent, (IMP *)&orig_NEHotspotNetwork_fetchCurrent);
     }
 }
 
@@ -519,8 +438,6 @@ static void SCHookNEHotspotNetwork(void) {
             void *current = dlsym(sc, "CNCopyCurrentNetworkInfo");
             if (current) MSHookFunction(current, (void *)sc_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
         }
-
-        dlopen("/System/Library/Frameworks/NetworkExtension.framework/NetworkExtension", RTLD_NOW);
-        SCHookNEHotspotNetwork();
+        SCHookNEHotspotNetworkIfLoaded();
     }
 }

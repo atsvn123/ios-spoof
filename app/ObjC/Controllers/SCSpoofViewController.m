@@ -2,27 +2,113 @@
 #import "../Models/SCAppConfig.h"
 #import "../Models/SCDevicePresetStore.h"
 
-@interface SCSpoofViewController () <UISearchBarDelegate>
+@interface SCGPSSearchViewController : UITableViewController <UISearchBarDelegate>
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) NSArray *results;
+@property (nonatomic) BOOL loading;
+@property (nonatomic, copy) void (^selectionHandler)(double latitude, double longitude);
+@end
+
+@implementation SCGPSSearchViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Tìm địa điểm";
+    self.results = @[];
+    self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
+    self.searchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 56)];
+    self.searchBar.placeholder = @"Nhập tên địa điểm...";
+    self.searchBar.delegate = self;
+    self.searchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.tableView.tableHeaderView = self.searchBar;
+}
+
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; [self.searchBar becomeFirstResponder]; }
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return MAX((NSInteger)self.results.count, 1); }
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    if (self.results.count == 0) {
+        cell.textLabel.text = self.loading ? @"Đang tìm địa điểm..." : (self.searchBar.text.length >= 3 ? @"Không tìm thấy kết quả" : @"Nhập ít nhất 3 ký tự để tìm");
+        cell.textLabel.textColor = [UIColor secondaryLabelColor];
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        return cell;
+    }
+    NSDictionary *r = self.results[indexPath.row];
+    cell.textLabel.text = r[@"display_name"] ?: @"";
+    cell.textLabel.numberOfLines = 2;
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@, %@", r[@"lat"] ?: @"?", r[@"lon"] ?: @"?"];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row >= (NSInteger)self.results.count) return;
+    NSDictionary *r = self.results[indexPath.row];
+    if (self.selectionHandler) self.selectionHandler([r[@"lat"] doubleValue], [r[@"lon"] doubleValue]);
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (void)searchBar:(UISearchBar *)bar textDidChange:(NSString *)searchText {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(searchNow) object:nil];
+    if (searchText.length < 3) {
+        self.loading = NO;
+        self.results = @[];
+        [self.tableView reloadData];
+        return;
+    }
+    self.loading = YES;
+    self.results = @[];
+    [self.tableView reloadData];
+    [self performSelector:@selector(searchNow) withObject:nil afterDelay:0.6];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)bar { [self searchNow]; }
+
+- (void)searchNow {
+    NSString *query = [self.searchBar.text stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    if (!query.length) return;
+    NSString *urlStr = [NSString stringWithFormat:@"https://nominatim.openstreetmap.org/search?format=json&q=%@&limit=10", query];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlStr]];
+    [req setValue:@"iOSSpoof/1.0" forHTTPHeaderField:@"User-Agent"];
+    [req setValue:@"vi,en;q=0.8" forHTTPHeaderField:@"Accept-Language"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSArray *results = @[];
+        if (data) {
+            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if ([json isKindOfClass:NSArray.class]) results = json;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.loading = NO;
+            self.results = results;
+            [self.tableView reloadData];
+        });
+    }] resume];
+}
+
+@end
+
+@interface SCSpoofViewController ()
 @property (nonatomic) BOOL geoIPLoading;
-@property (nonatomic, strong) UISearchBar *gpsSearchBar;
-@property (nonatomic, strong) NSArray *gpsSearchResults;
-@property (nonatomic) BOOL gpsSearching;
-@property (nonatomic) BOOL gpsSearchLoading;
 @property (nonatomic) NSInteger carrierPresetIndex;
 @property (nonatomic, copy) NSString *proxyCheckResult;
 @end
 
 @implementation SCSpoofViewController
 
+- (NSString *)iosVersionDetail {
+    NSString *version = self.config.systemVersion.length ? self.config.systemVersion : @"17.5";
+    NSString *build = self.config.buildID.length ? self.config.buildID : [SCDevicePresetStore iosVersionOptions][@"iOS 17.5"][@"build"];
+    return build.length ? [NSString stringWithFormat:@"%@ (%@)", version, build] : version;
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
     tap.cancelsTouchesInView = NO;
     [self.tableView addGestureRecognizer:tap];
-    self.gpsSearchBar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 44)];
-    self.gpsSearchBar.placeholder = @"Tìm địa điểm (OpenStreetMap)...";
-    self.gpsSearchBar.delegate = self;
-    self.gpsSearchResults = @[];
     self.carrierPresetIndex = -1;
 }
 
@@ -52,7 +138,6 @@
 
 - (NSInteger)gpsRowCount {
     if (self.config.geoFromIP) return 5;
-    if (self.gpsSearching) return 2 + MAX((NSInteger)self.gpsSearchResults.count, 1);
     return 2 + 5; // toggle + search bar + 5 manual fields
 }
 
@@ -64,7 +149,7 @@
     switch (s) {
         case 0: return self.config.networkMode == 2 ? @"Cellular: app thấy 4G/5G thay WiFi." : @"WiFi: app thấy đang dùng WiFi (có thể spoof SSID).";
         case 1: return @"Proxy trong suốt. Geo từ IP sẽ lấy vị trí theo IP proxy.";
-        case 2: return self.config.geoFromIP ? @"Đang lấy vị trí từ IP. Nhập thủ công đã tắt." : (self.gpsSearching ? @"Chọn địa điểm từ kết quả tìm kiếm." : @"Nhập tọa độ thủ công hoặc tìm kiếm địa điểm.");
+        case 2: return self.config.geoFromIP ? @"Đang lấy vị trí từ IP. Nhập thủ công đã tắt." : @"Nhập tọa độ thủ công hoặc tìm kiếm địa điểm.";
         case 3: return @"Chọn preset hoặc nhập thủ công.";
         default: return @"";
     }
@@ -171,27 +256,14 @@
         return c;
     }
     if (i.row == 1) {
-        UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-        self.gpsSearchBar.frame = CGRectMake(0, 0, self.view.bounds.size.width, 44);
-        self.gpsSearchBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-        [c.contentView addSubview:self.gpsSearchBar];
-        c.selectionStyle = UITableViewCellSelectionStyleNone;
+        UITableViewCell *c = [self cellWithTitle:@"Tìm địa điểm" detail:@"OpenStreetMap"];
+        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        c.selectionStyle = UITableViewCellSelectionStyleDefault;
         return c;
-    }
-    if (self.gpsSearching) {
-        if (self.gpsSearchResults.count == 0) {
-            UITableViewCell *c = [self cellWithTitle:self.gpsSearchLoading ? @"Đang tìm địa điểm..." : @"Không tìm thấy kết quả" detail:@""];
-            c.textLabel.textColor = [UIColor secondaryLabelColor];
-            return c;
-        }
-        NSDictionary *r = self.gpsSearchResults[i.row - 2];
-        NSString *name = r[@"display_name"] ?: @"";
-        if (name.length > 60) name = [name substringToIndex:60];
-        return [self cellWithTitle:name detail:@""];
     }
     // Manual fields
     NSArray *titles = @[@"Latitude", @"Longitude", @"Altitude", @"Accuracy", @"Heading"];
-    NSInteger fieldIdx = self.gpsSearching ? -1 : (i.row - 2);
+    NSInteger fieldIdx = i.row - 2;
     if (fieldIdx < 0 || fieldIdx >= titles.count) return [self cellWithTitle:@"" detail:@""];
     NSArray *vals = @[@(self.config.latitude), @(self.config.longitude), @(self.config.altitude), @(self.config.horizontalAccuracy), @(self.config.heading)];
     UITableViewCell *c = [self cellWithTitle:titles[fieldIdx] detail:nil];
@@ -217,51 +289,6 @@
 
 - (void)toggleGeo:(UISwitch *)s { self.config.geoEnabled = s.on; [self.config save]; }
 
-#pragma mark - GPS Search (Nominatim)
-
-- (void)searchBar:(UISearchBar *)bar textDidChange:(NSString *)searchText {
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(gpsSearch) object:nil];
-    if (searchText.length < 3) {
-        self.gpsSearching = NO;
-        self.gpsSearchLoading = NO;
-        self.gpsSearchResults = @[];
-        [self.tableView reloadData];
-        return;
-    }
-    self.gpsSearching = YES;
-    self.gpsSearchLoading = YES;
-    self.gpsSearchResults = @[];
-    [self.tableView reloadData];
-    [self performSelector:@selector(gpsSearch) withObject:nil afterDelay:0.6];
-}
-
-- (void)gpsSearch {
-    NSString *query = [self.gpsSearchBar.text stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-    if (!query.length) return;
-    NSString *urlStr = [NSString stringWithFormat:@"https://nominatim.openstreetmap.org/search?format=json&q=%@&limit=8", query];
-    NSURL *url = [NSURL URLWithString:urlStr];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    [req setValue:@"iOSSpoof/1.0" forHTTPHeaderField:@"User-Agent"];
-    [req setValue:@"vi,en;q=0.8" forHTTPHeaderField:@"Accept-Language"];
-    NSURLSession *session = [NSURLSession sharedSession];
-    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        NSArray *results = @[];
-        if (data) {
-            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([json isKindOfClass:[NSArray class]]) results = json;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.gpsSearchLoading = NO;
-            self.gpsSearchResults = results;
-            [self.tableView reloadData];
-        });
-    }] resume];
-}
-
-- (void)searchBarSearchButtonClicked:(UISearchBar *)bar {
-    [bar resignFirstResponder];
-}
-
 #pragma mark - Carrier (preset at top, empty fields below)
 
 - (UITableViewCell *)carrierPresetCell {
@@ -284,17 +311,16 @@
     [t deselectRowAtIndexPath:i animated:YES];
     [self dismissKeyboard];
     if (i.section == 1 && (!self.config.proxyEnabled || i.row == 6)) { [self checkProxy]; return; }
-    if (i.section == 2 && self.gpsSearching && i.row >= 2 && i.row - 2 < (NSInteger)self.gpsSearchResults.count) {
-        NSDictionary *r = self.gpsSearchResults[i.row - 2];
-        self.config.latitude = [r[@"lat"] doubleValue];
-        self.config.longitude = [r[@"lon"] doubleValue];
-        self.config.geoEnabled = YES;
-        [self.config save];
-        self.gpsSearching = NO;
-        self.gpsSearchLoading = NO;
-        self.gpsSearchResults = @[];
-        self.gpsSearchBar.text = @"";
-        [self.tableView reloadData];
+    if (i.section == 2 && !self.config.geoFromIP && i.row == 1) {
+        SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
+        vc.selectionHandler = ^(double latitude, double longitude) {
+            self.config.latitude = latitude;
+            self.config.longitude = longitude;
+            self.config.geoEnabled = YES;
+            [self.config save];
+            [self.tableView reloadData];
+        };
+        [self.navigationController pushViewController:vc animated:YES];
         return;
     }
     if (i.section == 3 && i.row == 0) { [self showCarrierPresets]; return; }
@@ -345,7 +371,7 @@
 
 - (UITableViewCell *)systemCell:(NSIndexPath *)i {
     switch (i.row) {
-        case 0: { UITableViewCell *c = [self cellWithTitle:@"iOS Version" detail:[NSString stringWithFormat:@"%@ (%@)", self.config.systemVersion ?: @"17.5", self.config.buildID ?: @"21F90"]]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
+        case 0: { UITableViewCell *c = [self cellWithTitle:@"iOS Version" detail:[self iosVersionDetail]]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
         case 1: { UITableViewCell *c = [self cellWithTitle:@"Total Storage" detail:self.config.totalStorage > 0 ? [NSString stringWithFormat:@"%lu GB", (unsigned long)self.config.totalStorage] : @"Auto"]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
         case 2: { UITableViewCell *c = [self cellWithTitle:@"Free Storage" detail:self.config.freeStorage > 0 ? [NSString stringWithFormat:@"%lu GB", (unsigned long)self.config.freeStorage] : @"Auto"]; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
         case 3: return [self switchCellWithTitle:@"Low Power Mode" on:self.config.lowPowerMode action:@selector(toggleLowPower:)];

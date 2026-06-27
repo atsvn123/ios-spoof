@@ -6,6 +6,29 @@
 
 - (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.config load]; [self.tableView reloadData]; }
 
+- (NSString *)effectiveBuildID {
+    if (self.config.buildID.length) return self.config.buildID;
+    NSString *version = self.config.systemVersion.length ? self.config.systemVersion : @"17.5";
+    NSDictionary *versions = [SCDevicePresetStore iosVersionOptions];
+    for (NSString *key in versions) {
+        NSDictionary *info = versions[key];
+        if ([info[@"version"] isEqualToString:version]) return info[@"build"];
+    }
+    return @"21F90";
+}
+
+- (NSUInteger)effectiveTotalStorage {
+    if (self.config.totalStorage > 0) return self.config.totalStorage;
+    NSDictionary *p = [self.config resolvedPreset];
+    return [p[@"capacityGB"] unsignedIntegerValue];
+}
+
+- (NSUInteger)effectiveFreeStorage {
+    if (self.config.freeStorage > 0) return self.config.freeStorage;
+    NSUInteger total = [self effectiveTotalStorage];
+    return total > 0 ? total / 3 : 0;
+}
+
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 7; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
@@ -61,9 +84,9 @@
         case 5: {
             switch (i.row) {
                 case 0: return [self cellWithTitle:@"iOS Version" detail:self.config.systemVersion ?: @"17.5"];
-                case 1: return [self cellWithTitle:@"Build ID" detail:self.config.buildID.length ? self.config.buildID : @"21F90"];
-                case 2: return [self cellWithTitle:@"Total Storage" detail:self.config.totalStorage > 0 ? [NSString stringWithFormat:@"%lu GB", (unsigned long)self.config.totalStorage] : @"-"];
-                case 3: return [self cellWithTitle:@"Free Storage" detail:self.config.freeStorage > 0 ? [NSString stringWithFormat:@"%lu GB", (unsigned long)self.config.freeStorage] : @"-"];
+                case 1: return [self cellWithTitle:@"Build ID" detail:[self effectiveBuildID]];
+                case 2: return [self cellWithTitle:@"Total Storage" detail:[NSString stringWithFormat:@"%lu GB%@", (unsigned long)[self effectiveTotalStorage], self.config.totalStorage > 0 ? @"" : @" (Auto)"]];
+                case 3: return [self cellWithTitle:@"Free Storage" detail:[NSString stringWithFormat:@"%lu GB%@", (unsigned long)[self effectiveFreeStorage], self.config.freeStorage > 0 ? @"" : @" (Auto)"]];
                 case 4: return [self cellWithTitle:@"Low Power Mode" detail:self.config.lowPowerMode ? @"Bật" : @"Tắt"];
                 case 5: return [self cellWithTitle:@"IDFA/IDFV" detail:self.config.spoofIDFA ? @"Spoofing" : @"Off"];
                 case 6: return [self cellWithTitle:@"Unique ID" detail:self.config.uniqueID.length ? self.config.uniqueID : @"Auto"];

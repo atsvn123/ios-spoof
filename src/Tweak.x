@@ -4,10 +4,13 @@
 #import <objc/runtime.h>
 #import <sys/sysctl.h>
 #import <sys/stat.h>
+#import <sys/attr.h>
 #import <sys/utsname.h>
 #import <sys/mount.h>
+#import <sys/statvfs.h>
 #import <net/if.h>
 #import <mach/mach.h>
+#import <mach/host_info.h>
 #import <dlfcn.h>
 #import <fcntl.h>
 #import <unistd.h>
@@ -15,6 +18,14 @@
 #import <string.h>
 #import <substrate.h>
 #import <IOKit/IOKitLib.h>
+
+#ifndef HW_MEMSIZE
+#define HW_MEMSIZE 24
+#endif
+
+#ifndef ATTR_VOL_SPACEAVAIL
+#define ATTR_VOL_SPACEAVAIL 0x00000080
+#endif
 
 // ============================================================================
 //  iOSSpoof - Tweak.x
@@ -28,6 +39,33 @@
 static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 static SCDevicePreset *P()  { return CFG().resolvedPreset; }
 static BOOL SC_ON()         { return CFG().enabled; }
+
+static unsigned long long SCFakeTotalBytes(void) {
+    NSUInteger gb = CFG().totalStorage;
+    if (gb == 0 && P().capacityGB.length) gb = (NSUInteger)[P().capacityGB integerValue];
+    return gb > 0 ? (unsigned long long)gb * 1024ULL * 1024ULL * 1024ULL : 0;
+}
+
+static unsigned long long SCFakeFreeBytes(void) {
+    NSUInteger freeGB = CFG().freeStorage;
+    if (freeGB == 0) {
+        NSUInteger totalGB = CFG().totalStorage ?: (NSUInteger)[P().capacityGB integerValue];
+        freeGB = totalGB > 0 ? totalGB / 3 : 0;
+    }
+    return freeGB > 0 ? (unsigned long long)freeGB * 1024ULL * 1024ULL * 1024ULL : 0;
+}
+
+static uint64_t SCRamBytesForPreset(void) {
+    NSString *pt = P().productType ?: @"";
+    if ([pt hasPrefix:@"iPhone10,"]) return 3ULL * 1024ULL * 1024ULL * 1024ULL;
+    if ([pt hasPrefix:@"iPhone12,"]) return 4ULL * 1024ULL * 1024ULL * 1024ULL;
+    if ([pt hasPrefix:@"iPhone13,"]) return 4ULL * 1024ULL * 1024ULL * 1024ULL;
+    if ([pt hasPrefix:@"iPhone14,2"] || [pt hasPrefix:@"iPhone14,3"]) return 6ULL * 1024ULL * 1024ULL * 1024ULL;
+    if ([pt hasPrefix:@"iPhone14,"]) return 4ULL * 1024ULL * 1024ULL * 1024ULL;
+    if ([pt hasPrefix:@"iPhone15,"]) return 6ULL * 1024ULL * 1024ULL * 1024ULL;
+    if ([pt hasPrefix:@"iPhone16,"]) return 8ULL * 1024ULL * 1024ULL * 1024ULL;
+    return 6ULL * 1024ULL * 1024ULL * 1024ULL;
+}
 
 // ----------------------------------------------------------------------------
 //  Lắng nghe thay đổi preferences
@@ -142,6 +180,15 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
         else if ([n isEqualToString:@"hw.UUID"] || [n isEqualToString:@"hw.uuid"]) val = [CFG().spoofedUDID UTF8String];
         else if ([n isEqualToString:@"hw.product"] || [n isEqualToString:@"hw.productname"]) val = [P().productType UTF8String];
         else if ([n isEqualToString:@"hw.target"]) val = [P().internalName UTF8String];
+        else if ([n isEqualToString:@"hw.memsize"]) {
+            uint64_t mem = SCRamBytesForPreset();
+            size_t need = sizeof(mem);
+            if (oldlenp) {
+                if (oldp && *oldlenp >= need) memcpy(oldp, &mem, need);
+                *oldlenp = need;
+            }
+            return 0;
+        }
         if (val) {
             size_t need = strlen(val) + 1;
             if (oldlenp) {
@@ -154,6 +201,36 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
         }
     }
     return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
+}
+
+static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t);
+static int sc_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
+    if (SC_ON() && P() && name && namelen >= 2 && name[0] == CTL_HW && name[1] == HW_MEMSIZE) {
+        uint64_t mem = SCRamBytesForPreset();
+        size_t need = sizeof(mem);
+        if (oldlenp) {
+            if (oldp && *oldlenp >= need) memcpy(oldp, &mem, need);
+            *oldlenp = need;
+        }
+        return 0;
+    }
+    return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+}
+
+static kern_return_t (*orig_host_statistics64)(host_t, host_flavor_t, host_info64_t, mach_msg_type_number_t *);
+static kern_return_t sc_host_statistics64(host_t host, host_flavor_t flavor, host_info64_t host_info64_out, mach_msg_type_number_t *host_info64_outCnt) {
+    kern_return_t r = orig_host_statistics64(host, flavor, host_info64_out, host_info64_outCnt);
+    if (r == KERN_SUCCESS && SC_ON() && P() && flavor == HOST_VM_INFO64 && host_info64_out) {
+        vm_statistics64_data_t *vm = (vm_statistics64_data_t *)host_info64_out;
+        uint64_t pages = SCRamBytesForPreset() / (uint64_t)vm_page_size;
+        if (pages > 0) {
+            vm->free_count = (natural_t)(pages / 4);
+            vm->active_count = (natural_t)(pages / 3);
+            vm->inactive_count = (natural_t)(pages / 5);
+            vm->wire_count = (natural_t)(pages / 6);
+        }
+    }
+    return r;
 }
 
 // ============================================================================
@@ -206,15 +283,100 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
 static int (*orig_statfs)(const char *, struct statfs *);
 static int sc_statfs(const char *path, struct statfs *buf) {
     int r = orig_statfs(path, buf);
-    if (r == 0 && SC_ON() && CFG().totalStorage > 0) {
-        unsigned long long total = (unsigned long long)CFG().totalStorage * 1024ULL * 1024ULL * 1024ULL;
-        unsigned long long free = (unsigned long long)(CFG().freeStorage > 0 ? CFG().freeStorage : CFG().totalStorage / 2) * 1024ULL * 1024ULL * 1024ULL;
+    if (r == 0 && SC_ON() && buf) {
+        unsigned long long total = SCFakeTotalBytes();
+        unsigned long long free = SCFakeFreeBytes();
+        if (total == 0 || free == 0 || buf->f_bsize == 0) return r;
         buf->f_blocks = total / buf->f_bsize;
         buf->f_bfree = free / buf->f_bsize;
         buf->f_bavail = free / buf->f_bsize;
     }
     return r;
 }
+
+static int (*orig_statvfs)(const char *, struct statvfs *);
+static int sc_statvfs(const char *path, struct statvfs *buf) {
+    int r = orig_statvfs(path, buf);
+    if (r == 0 && SC_ON() && buf) {
+        unsigned long long total = SCFakeTotalBytes();
+        unsigned long long free = SCFakeFreeBytes();
+        if (total == 0 || free == 0 || buf->f_frsize == 0) return r;
+        buf->f_blocks = total / buf->f_frsize;
+        buf->f_bfree = free / buf->f_frsize;
+        buf->f_bavail = free / buf->f_frsize;
+    }
+    return r;
+}
+
+static int (*orig_getattrlist)(const char *, struct attrlist *, void *, size_t, unsigned long);
+static int sc_getattrlist(const char *path, struct attrlist *attrList, void *attrBuf, size_t attrBufSize, unsigned long options) {
+    int r = orig_getattrlist(path, attrList, attrBuf, attrBufSize, options);
+    if (r == 0 && SC_ON() && attrList && attrBuf && attrBufSize >= sizeof(uint32_t) + sizeof(uint64_t)) {
+        unsigned long long total = SCFakeTotalBytes();
+        unsigned long long free = SCFakeFreeBytes();
+        if (total > 0 && free > 0) {
+            uint8_t *cursor = (uint8_t *)attrBuf + sizeof(uint32_t);
+            uint8_t *end = (uint8_t *)attrBuf + attrBufSize;
+            uint32_t vol = attrList->volattr;
+            uint32_t attrs[] = { ATTR_VOL_SIZE, ATTR_VOL_SPACEFREE, ATTR_VOL_SPACEAVAIL };
+            for (NSUInteger i = 0; i < sizeof(attrs) / sizeof(attrs[0]); i++) {
+                if (!(vol & attrs[i])) continue;
+                if (cursor + sizeof(uint64_t) > end) break;
+                uint64_t *value = (uint64_t *)cursor;
+                if (attrs[i] == ATTR_VOL_SIZE) *value = total;
+                else *value = free;
+                cursor += sizeof(uint64_t);
+            }
+        }
+    }
+    return r;
+}
+
+%hook NSFileManager
+- (NSDictionary *)attributesOfFileSystemForPath:(NSString *)path error:(NSError **)error {
+    NSDictionary *orig = %orig;
+    if (!SC_ON()) return orig;
+    unsigned long long total = SCFakeTotalBytes();
+    unsigned long long free = SCFakeFreeBytes();
+    if (total == 0 || free == 0) return orig;
+    NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:orig ?: @{}];
+    m[NSFileSystemSize] = @(total);
+    m[NSFileSystemFreeSize] = @(free);
+    return m.copy;
+}
+%end
+
+%hook NSURL
+- (BOOL)getResourceValue:(out id  _Nullable *)value forKey:(NSURLResourceKey)key error:(NSError **)error {
+    BOOL ok = %orig;
+    if (ok && SC_ON() && value) {
+        unsigned long long total = SCFakeTotalBytes();
+        unsigned long long free = SCFakeFreeBytes();
+        if ([key isEqualToString:NSURLVolumeTotalCapacityKey] && total > 0) *value = @(total);
+        else if ([key isEqualToString:NSURLVolumeAvailableCapacityKey] && free > 0) *value = @(free);
+        else if (@available(iOS 11.0, *)) {
+            if ([key isEqualToString:NSURLVolumeAvailableCapacityForImportantUsageKey] && free > 0) *value = @(free);
+            else if ([key isEqualToString:NSURLVolumeAvailableCapacityForOpportunisticUsageKey] && free > 0) *value = @(free);
+        }
+    }
+    return ok;
+}
+- (NSDictionary<NSURLResourceKey, id> *)resourceValuesForKeys:(NSArray<NSURLResourceKey> *)keys error:(NSError **)error {
+    NSDictionary *orig = %orig;
+    if (!SC_ON()) return orig;
+    unsigned long long total = SCFakeTotalBytes();
+    unsigned long long free = SCFakeFreeBytes();
+    if (total == 0 || free == 0) return orig;
+    NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:orig ?: @{}];
+    if ([keys containsObject:NSURLVolumeTotalCapacityKey]) m[NSURLVolumeTotalCapacityKey] = @(total);
+    if ([keys containsObject:NSURLVolumeAvailableCapacityKey]) m[NSURLVolumeAvailableCapacityKey] = @(free);
+    if (@available(iOS 11.0, *)) {
+        if ([keys containsObject:NSURLVolumeAvailableCapacityForImportantUsageKey]) m[NSURLVolumeAvailableCapacityForImportantUsageKey] = @(free);
+        if ([keys containsObject:NSURLVolumeAvailableCapacityForOpportunisticUsageKey]) m[NSURLVolumeAvailableCapacityForOpportunisticUsageKey] = @(free);
+    }
+    return m.copy;
+}
+%end
 
 // ============================================================================
 //  4c. NSProcessInfo - processorCount, physicalMemory, thermalState
@@ -230,8 +392,7 @@ static int sc_statfs(const char *path, struct statfs *buf) {
 }
 - (uint64_t)physicalMemory {
     if (SC_ON() && P()) {
-        // 6GB = 6 * 1024^3
-        return 6ULL * 1024ULL * 1024ULL * 1024ULL;
+        return SCRamBytesForPreset();
     }
     return %orig;
 }
@@ -258,6 +419,60 @@ static int sc_statfs(const char *path, struct statfs *buf) {
 // ============================================================================
 //  4e. User-Agent spoofing (NSMutableURLRequest / NSURLSession)
 // ============================================================================
+
+static UIWindow *SCStatusOverlayWindow;
+static UILabel *SCStatusOverlayLabel;
+
+static void SCInstallStatusOverlay(UIWindow *window) {
+    if (!SC_ON() || !window || !P()) return;
+    if (!SCStatusOverlayWindow) {
+        SCStatusOverlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        SCStatusOverlayWindow.windowLevel = UIWindowLevelStatusBar + 10;
+        SCStatusOverlayWindow.backgroundColor = [UIColor clearColor];
+        SCStatusOverlayWindow.userInteractionEnabled = NO;
+        UIViewController *vc = [UIViewController new];
+        vc.view.backgroundColor = [UIColor clearColor];
+        SCStatusOverlayWindow.rootViewController = vc;
+        SCStatusOverlayWindow.hidden = NO;
+        CGFloat top = 20;
+        if (@available(iOS 11.0, *)) top = MAX(window.safeAreaInsets.top, (CGFloat)20);
+        SCStatusOverlayLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, SCStatusOverlayWindow.bounds.size.width, top)];
+        SCStatusOverlayLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleBottomMargin;
+        SCStatusOverlayLabel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.86];
+        SCStatusOverlayLabel.textColor = [UIColor whiteColor];
+        SCStatusOverlayLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+        SCStatusOverlayLabel.textAlignment = NSTextAlignmentCenter;
+        SCStatusOverlayLabel.numberOfLines = 1;
+        [vc.view addSubview:SCStatusOverlayLabel];
+    }
+    NSString *ssid = CFG().wifiSSID.length ? CFG().wifiSSID : @"MyWiFi";
+    NSString *network = CFG().networkMode == 1 ? [NSString stringWithFormat:@"WiFi %@", ssid] : (CFG().networkMode == 2 ? @"Cellular" : @"Network Default");
+    NSString *storage = SCFakeTotalBytes() > 0 ? [NSString stringWithFormat:@"%lluGB/%lluGB", SCFakeFreeBytes() / 1024ULL / 1024ULL / 1024ULL, SCFakeTotalBytes() / 1024ULL / 1024ULL / 1024ULL] : @"Storage Auto";
+    NSString *ram = [NSString stringWithFormat:@"%lluGB RAM", SCRamBytesForPreset() / 1024ULL / 1024ULL / 1024ULL];
+    SCStatusOverlayLabel.text = [NSString stringWithFormat:@"iOSSpoof active | %@ | %@ | %@ | %@", P().marketingName ?: P().productType ?: @"iPhone", network, storage, ram];
+    SCStatusOverlayWindow.hidden = NO;
+}
+
+%hook UIWindow
+- (void)makeKeyAndVisible {
+    %orig;
+    SCInstallStatusOverlay(self);
+}
+- (void)didMoveToWindow {
+    %orig;
+    SCInstallStatusOverlay(self);
+}
+- (void)layoutSubviews {
+    %orig;
+    if (SCStatusOverlayWindow && SCStatusOverlayLabel) {
+        SCStatusOverlayWindow.frame = [UIScreen mainScreen].bounds;
+        CGFloat top = 0;
+        if (@available(iOS 11.0, *)) top = self.safeAreaInsets.top;
+        if (top < 20) top = 20;
+        SCStatusOverlayLabel.frame = CGRectMake(0, 0, SCStatusOverlayWindow.bounds.size.width, top);
+    }
+}
+%end
 
 %hook NSMutableURLRequest
 - (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
@@ -509,6 +724,8 @@ static NSSet *sc_protected_bundles(void) {
 
         // C function hooks
         MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
+        MSHookFunction((void *)&sysctl, (void *)sc_sysctl, (void **)&orig_sysctl);
+        MSHookFunction((void *)&host_statistics64, (void *)sc_host_statistics64, (void **)&orig_host_statistics64);
 
         void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
         if (iokit) {
@@ -524,5 +741,7 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
         MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
+        MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
+        MSHookFunction((void *)&getattrlist, (void *)sc_getattrlist, (void **)&orig_getattrlist);
     }
 }

@@ -21,5 +21,5 @@ iOSSpoof_LDFLAGS = -framework CFNetwork
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-SUBPROJECTS = prefs daemon
+SUBPROJECTS = prefs daemon app
 include $(THEOS_MAKE_PATH)/aggregate.mk

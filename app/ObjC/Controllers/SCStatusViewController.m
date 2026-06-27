@@ -15,7 +15,7 @@
         case 2: return 4;  // Carrier
         case 3: return 6;  // GPS
         case 4: return 3;  // Network mode
-        case 5: return 7;  // System spoof
+        case 5: return 9;  // System spoof
         case 6: return 2;  // Actions
         default: return 0;
     }
@@ -67,6 +67,8 @@
                 case 4: return [self cellWithTitle:@"Low Power Mode" detail:self.config.lowPowerMode ? @"Bật" : @"Tắt"];
                 case 5: return [self cellWithTitle:@"IDFA/IDFV" detail:self.config.spoofIDFA ? @"Spoofing" : @"Off"];
                 case 6: return [self cellWithTitle:@"Unique ID" detail:self.config.uniqueID.length ? self.config.uniqueID : @"Auto"];
+                case 7: return [self cellWithTitle:@"Spoof Battery" detail:self.config.spoofBattery ? @"Bật" : @"Tắt"];
+                case 8: return [self cellWithTitle:@"Hide Jailbreak" detail:self.config.hideJailbreak ? @"Bật" : @"Tắt"];
             }
         }
         case 6: {

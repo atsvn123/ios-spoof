@@ -3,7 +3,6 @@
 #import "Controllers/SCDeviceViewController.h"
 #import "Controllers/SCAppsViewController.h"
 #import "Controllers/SCSpoofViewController.h"
-#import "Controllers/SCHardwareViewController.h"
 
 static UINavigationController *SCNav(UIViewController *vc, NSString *title, NSString *imageName) {
     vc.title = title;
@@ -24,8 +23,7 @@ static UINavigationController *SCNav(UIViewController *vc, NSString *title, NSSt
             SCNav([SCStatusViewController new], @"Status", @"shield.lefthalf.fill"),
             SCNav([SCDeviceViewController new], @"Device", @"iphone"),
             SCNav([SCAppsViewController new], @"Apps", @"app.badge"),
-            SCNav([SCSpoofViewController new], @"Spoof", @"gearshape"),
-            SCNav([SCHardwareViewController new], @"Hardware", @"cpu")
+            SCNav([SCSpoofViewController new], @"Spoof", @"gearshape")
         ];
     }
     return self;

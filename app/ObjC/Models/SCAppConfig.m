@@ -168,6 +168,17 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.heading = arc4random_uniform(360);
     self.hideProxy = self.hideVPN = self.hideJailbreak = YES;
     self.spoofIDFA = self.spoofIDFV = self.spoofBattery = YES;
+    // Auto storage from preset
+    NSArray *storageOpts = [SCDevicePresetStore storageOptionsForProductType:preset[@"productType"]];
+    self.totalStorage = [storageOpts[arc4random_uniform((uint32_t)storageOpts.count)] unsignedIntegerValue];
+    self.freeStorage = self.totalStorage / (2 + arc4random_uniform(3)); // 33-50% free
+    // Auto iOS version + build ID
+    NSDictionary *iosVersions = [SCDevicePresetStore iosVersionOptions];
+    NSArray *iosKeys = iosVersions.allKeys;
+    NSString *iosKey = iosKeys[arc4random_uniform((uint32_t)iosKeys.count)];
+    NSDictionary *iosInfo = iosVersions[iosKey];
+    self.systemVersion = iosInfo[@"version"];
+    self.buildID = iosInfo[@"build"];
     [self clearIDCache];
     [self save];
 }

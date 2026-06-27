@@ -1,5 +1,6 @@
 #import "SCSpoofViewController.h"
 #import "../Models/SCAppConfig.h"
+#import "../Models/SCDevicePresetStore.h"
 
 @interface SCSpoofViewController () <UISearchBarDelegate>
 @property (nonatomic) BOOL geoIPLoading;
@@ -38,12 +39,12 @@
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
-        case 0: return self.config.networkMode == 2 ? 2 : 4; // Network: hide SSID/BSSID when cellular
-        case 1: return self.config.proxyEnabled ? 7 : 2; // Proxy + check
-        case 2: return [self gpsRowCount]; // GPS
-        case 3: return 1 + 5; // Carrier: preset row + 5 fields
-        case 4: return 5; // Anti-detect
-        case 5: return 6; // System
+        case 0: return self.config.networkMode == 2 ? 2 : 4;
+        case 1: return self.config.proxyEnabled ? 7 : 2;
+        case 2: return [self gpsRowCount];
+        case 3: return 1 + 5;
+        case 4: return 5;
+        case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
         default: return 0;
     }
 }
@@ -99,8 +100,13 @@
         c.accessoryView = [self textFieldWithText:self.config.wifiSSID placeholder:@"MyWiFi" tag:500 keyboard:UIKeyboardTypeDefault];
         return c;
     }
-    UITableViewCell *c = [self cellWithTitle:@"WiFi BSSID" detail:nil];
-    c.accessoryView = [self textFieldWithText:self.config.wifiBSSID placeholder:@"02:00:00:00:00:00" tag:501 keyboard:UIKeyboardTypeDefault];
+    // BSSID row: tap to random
+    UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+    c.textLabel.text = @"WiFi BSSID";
+    c.detailTextLabel.text = self.config.wifiBSSID ?: @"02:00:00:00:00:00";
+    c.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+    c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    c.selectionStyle = UITableViewCellSelectionStyleDefault;
     return c;
 }
 
@@ -277,6 +283,18 @@
         return;
     }
     if (i.section == 3 && i.row == 0) { [self showCarrierPresets]; return; }
+    if (i.section == 0 && i.row == 3) { [self randomBSSID]; return; }
+    if (i.section == 5) { [self showSystemPicker:i.row]; return; }
+}
+
+- (void)randomBSSID {
+    // Generate locally administered, unicast MAC
+    uint8_t b[6];
+    for (int j = 0; j < 6; j++) b[j] = (uint8_t)arc4random_uniform(256);
+    b[0] = (b[0] & 0xFE) | 0x02; // locally administered, unicast
+    self.config.wifiBSSID = [NSString stringWithFormat:@"%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]];
+    [self.config save];
+    [self.tableView reloadData];
 }
 
 - (void)showCarrierPresets {
@@ -312,18 +330,87 @@
 
 - (UITableViewCell *)systemCell:(NSIndexPath *)i {
     switch (i.row) {
-        case 0: { UITableViewCell *c = [self cellWithTitle:@"iOS Version" detail:nil]; c.accessoryView = [self textFieldWithText:self.config.systemVersion ?: @"17.5" placeholder:@"17.5" tag:900 keyboard:UIKeyboardTypeDefault]; return c; }
-        case 1: { UITableViewCell *c = [self cellWithTitle:@"Build ID" detail:nil]; c.accessoryView = [self textFieldWithText:self.config.buildID ?: @"21F90" placeholder:@"21F90" tag:901 keyboard:UIKeyboardTypeDefault]; return c; }
-        case 2: { UITableViewCell *c = [self cellWithTitle:@"Total Storage (GB)" detail:nil]; c.accessoryView = [self textFieldWithText:@(self.config.totalStorage).stringValue placeholder:@"256" tag:902 keyboard:UIKeyboardTypeNumberPad]; return c; }
-        case 3: { UITableViewCell *c = [self cellWithTitle:@"Free Storage (GB)" detail:nil]; c.accessoryView = [self textFieldWithText:@(self.config.freeStorage).stringValue placeholder:@"128" tag:903 keyboard:UIKeyboardTypeNumberPad]; return c; }
-        case 4: return [self switchCellWithTitle:@"Low Power Mode" on:self.config.lowPowerMode action:@selector(toggleLowPower:)];
-        case 5: return [self switchCellWithTitle:@"Spoof IDFA/IDFV" on:self.config.spoofIDFA action:@selector(toggleIDFA:)];
+        case 0: { UITableViewCell *c = [self cellWithTitle:@"iOS Version" detail:[NSString stringWithFormat:@"%@ (%@)", self.config.systemVersion ?: @"17.5", self.config.buildID ?: @"21F90"]]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
+        case 1: { UITableViewCell *c = [self cellWithTitle:@"Total Storage" detail:self.config.totalStorage > 0 ? [NSString stringWithFormat:@"%lu GB", (unsigned long)self.config.totalStorage] : @"Auto"]; c.accessoryType = UITableViewCellAccessoryDisclosureIndicator; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
+        case 2: { UITableViewCell *c = [self cellWithTitle:@"Free Storage" detail:self.config.freeStorage > 0 ? [NSString stringWithFormat:@"%lu GB", (unsigned long)self.config.freeStorage] : @"Auto"]; c.selectionStyle = UITableViewCellSelectionStyleDefault; return c; }
+        case 3: return [self switchCellWithTitle:@"Low Power Mode" on:self.config.lowPowerMode action:@selector(toggleLowPower:)];
+        case 4: return [self switchCellWithTitle:@"Spoof IDFA/IDFV" on:self.config.spoofIDFA action:@selector(toggleIDFA:)];
     }
     return [self cellWithTitle:@"" detail:@""];
 }
 
 - (void)toggleLowPower:(UISwitch *)s { self.config.lowPowerMode = s.on; [self.config save]; }
 - (void)toggleIDFA:(UISwitch *)s { self.config.spoofIDFA = s.on; [self.config save]; }
+
+- (void)showSystemPicker:(NSInteger)row {
+    if (row == 0) {
+        // iOS Version picker
+        NSDictionary *versions = [SCDevicePresetStore iosVersionOptions];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"iOS Version" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+        for (NSString *key in [versions.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+            NSDictionary *info = versions[key];
+            [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ (Build %@)", info[@"version"], info[@"build"]] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                self.config.systemVersion = info[@"version"];
+                self.config.buildID = info[@"build"];
+                [self.config save];
+                [self.tableView reloadData];
+            }]];
+        }
+        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+            alert.popoverPresentationController.sourceView = self.view;
+            alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+        }
+        [self presentViewController:alert animated:YES completion:nil];
+    } else if (row == 1) {
+        // Total Storage picker
+        NSArray *opts = [SCDevicePresetStore storageOptionsForProductType:self.config.productType];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Total Storage" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+        for (NSNumber *size in opts) {
+            [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%lu GB", (unsigned long)size.unsignedIntegerValue] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                self.config.totalStorage = size.unsignedIntegerValue;
+                if (self.config.freeStorage == 0 || self.config.freeStorage > self.config.totalStorage) {
+                    self.config.freeStorage = self.config.totalStorage / 3;
+                }
+                [self.config save];
+                [self.tableView reloadData];
+            }]];
+        }
+        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+            alert.popoverPresentationController.sourceView = self.view;
+            alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+        }
+        [self presentViewController:alert animated:YES completion:nil];
+    } else if (row == 2) {
+        // Free Storage: random button
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Free Storage" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+        if (self.config.totalStorage > 0) {
+            [alert addAction:[UIAlertAction actionWithTitle:@"Random" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                NSUInteger total = self.config.totalStorage;
+                NSUInteger min = total / 5;
+                NSUInteger max = total * 4 / 5;
+                self.config.freeStorage = min + arc4random_uniform((uint32_t)(max - min));
+                [self.config save];
+                [self.tableView reloadData];
+            }]];
+            for (NSUInteger pct = 10; pct <= 80; pct += 10) {
+                NSUInteger val = self.config.totalStorage * pct / 100;
+                [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%lu GB (%ld%%)", (unsigned long)val, (long)pct] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+                    self.config.freeStorage = val;
+                    [self.config save];
+                    [self.tableView reloadData];
+                }]];
+            }
+        }
+        [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+            alert.popoverPresentationController.sourceView = self.view;
+            alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+        }
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+}
 
 #pragma mark - Proxy Check
 
@@ -373,11 +460,10 @@
         if ([c.accessoryView isKindOfClass:UITextField.class]) {
             UITextField *t = (id)c.accessoryView;
             switch (t.tag / 100) {
-                case 5: if (t.tag==500) self.config.wifiSSID=t.text; if (t.tag==501) self.config.wifiBSSID=t.text; break;
+                case 5: if (t.tag==500) self.config.wifiSSID=t.text; break;
                 case 6: if (t.tag==601) self.config.proxyType=t.text; if (t.tag==602) self.config.proxyHost=t.text; if (t.tag==603) self.config.proxyPort=t.text.integerValue; if (t.tag==604) self.config.proxyUser=t.text; if (t.tag==605) self.config.proxyPass=t.text; break;
                 case 7: if (t.tag==702) self.config.latitude=t.text.doubleValue; if (t.tag==703) self.config.longitude=t.text.doubleValue; if (t.tag==704) self.config.altitude=t.text.doubleValue; if (t.tag==705) self.config.horizontalAccuracy=t.text.doubleValue; if (t.tag==706) self.config.heading=t.text.doubleValue; break;
                 case 8: if (t.tag==800) self.config.carrierName=t.text; if (t.tag==801) self.config.carrierMCC=t.text; if (t.tag==802) self.config.carrierMNC=t.text; if (t.tag==803) self.config.carrierISO=t.text; if (t.tag==804) self.config.radioTech=t.text; break;
-                case 9: if (t.tag==900) self.config.systemVersion=t.text; if (t.tag==901) self.config.buildID=t.text; if (t.tag==902) self.config.totalStorage=t.text.integerValue; if (t.tag==903) self.config.freeStorage=t.text.integerValue; break;
             }
         }
     }

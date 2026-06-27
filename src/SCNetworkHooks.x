@@ -261,6 +261,30 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
 }
 
 // ============================================================================
+//  6b. CNCopyCurrentNetworkInfo - fake WiFi SSID/BSSID or hide WiFi
+// ============================================================================
+
+CFDictionaryRef (*orig_CNCopyCurrentNetworkInfo)(CFStringRef);
+CFDictionaryRef sc_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
+    CFDictionaryRef r = orig_CNCopyCurrentNetworkInfo(interfaceName);
+    if (!SC_ON()) return r;
+    // networkMode 2 = fake cellular: return NULL (no WiFi)
+    if (CFG().networkMode == 2) {
+        if (r) CFRelease(r);
+        return NULL;
+    }
+    // networkMode 1 = fake WiFi: replace SSID/BSSID
+    if (CFG().networkMode == 1 && CFG().wifiSSID) {
+        if (r) CFRelease(r);
+        return CFDictionaryCreate(NULL,
+            (const void *[]){ CFSTR("SSID"), CFSTR("BSSID") },
+            (const void *[]){ (__bridge CFStringRef)CFG().wifiSSID, (__bridge CFStringRef)(CFG().wifiBSSID ?: @"02:00:00:00:00:00") },
+            2, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
+    return r;
+}
+
+// ============================================================================
 //  7. res_query / DNS - tránh leak (DNS resolve vẫn hoạt động nhưng không lộ proxy)
 //    DNS leak chủ yếu qua getaddrinfo -> hook để không trả về interface VPN.
 //    Không can thiệp sâu ở đây, scproxyd lo phần DNS tunnel.
@@ -320,5 +344,12 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
         MSHookFunction((void *)&getifaddrs, (void *)sc_getifaddrs, (void **)&orig_getifaddrs);
         MSHookFunction((void *)&if_nametoindex, (void *)sc_if_nametoindex, (void **)&orig_if_nametoindex);
         MSHookFunction((void *)&if_indextoname, (void *)sc_if_indextoname, (void **)&orig_if_indextoname);
+
+        // CNCopyCurrentNetworkInfo - fake WiFi
+        void *cfn = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW);
+        if (cfn) {
+            void *cn = dlsym(cfn, "CNCopyCurrentNetworkInfo");
+            if (cn) MSHookFunction(cn, (void *)sc_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
+        }
     }
 }

@@ -34,4 +34,29 @@
     return all[arc4random_uniform((uint32_t)all.count)];
 }
 
++ (NSArray<NSNumber *> *)storageOptionsForProductType:(NSString *)productType {
+    NSDictionary *p = [self presetForProductType:productType];
+    if (!p) return @[@64, @128, @256, @512];
+    // iPhone 8/X: 64, 128, 256
+    // iPhone 11-14: 128, 256, 512
+    // iPhone 15 Pro: 128, 256, 512, 1024
+    NSString *pt = p[@"productType"];
+    if ([pt hasPrefix:@"iPhone10,"]) return @[@64, @128, @256];
+    if ([pt hasPrefix:@"iPhone16,"]) return @[@128, @256, @512, @1024];
+    return @[@128, @256, @512];
+}
+
++ (NSDictionary *)iosVersionOptions {
+    return @{
+        @"iOS 15.8":  @{ @"version": @"15.8", @"build": @"19H370" },
+        @"iOS 16.7":  @{ @"version": @"16.7", @"build": @"20H19" },
+        @"iOS 17.5":  @{ @"version": @"17.5", @"build": @"21F90" },
+        @"iOS 17.6":  @{ @"version": @"17.6", @"build": @"21G80" },
+        @"iOS 17.7":  @{ @"version": @"17.7", @"build": @"21H30" },
+        @"iOS 18.0":  @{ @"version": @"18.0", @"build": @"22A3354" },
+        @"iOS 18.1":  @{ @"version": @"18.1", @"build": @"22B83" },
+        @"iOS 18.2":  @{ @"version": @"18.2", @"build": @"22C152" }
+    };
+}
+
 @end

@@ -207,24 +207,6 @@ int (*orig_getifaddrs)(struct ifaddrs **);
 int sc_getifaddrs(struct ifaddrs **ifap) {
     int r = orig_getifaddrs(ifap);
     if (r != 0 || !ifap || !*ifap) return r;
-
-    if (SC_ON() && (CFG().networkMode == 1 || CFG().networkMode == 2)) {
-        struct ifaddrs *net = *ifap;
-        while (net) {
-            if (net->ifa_name) {
-                NSString *name = [NSString stringWithUTF8String:net->ifa_name];
-                if (CFG().networkMode == 2) {
-                    if ([name isEqualToString:@"en0"]) net->ifa_flags &= ~(IFF_UP | IFF_RUNNING);
-                    if ([name hasPrefix:@"pdp_ip"]) net->ifa_flags |= (IFF_UP | IFF_RUNNING);
-                } else if (CFG().networkMode == 1) {
-                    if ([name isEqualToString:@"en0"]) net->ifa_flags |= (IFF_UP | IFF_RUNNING);
-                    if ([name hasPrefix:@"pdp_ip"]) net->ifa_flags &= ~(IFF_UP | IFF_RUNNING);
-                }
-            }
-            net = net->ifa_next;
-        }
-    }
-
     if (!SC_ON() || !CFG().hideVPN) return r;
 
     // Danh sách prefix interface cần ẩn
@@ -308,15 +290,8 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
 
 CFArrayRef (*orig_CNCopySupportedInterfaces)(void);
 CFArrayRef sc_CNCopySupportedInterfaces(void) {
-    if (SC_ON()) {
-        if (CFG().networkMode == 2) {
-            return CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
-        }
-        if (CFG().networkMode == 1) {
-            const void *values[] = { CFSTR("en0") };
-            return CFArrayCreate(NULL, values, 1, &kCFTypeArrayCallBacks);
-        }
-    }
+    // Always call orig — returning empty array crashes some apps.
+    // Cellular fake is handled by CNCopyCurrentNetworkInfo returning NULL.
     return orig_CNCopySupportedInterfaces ? orig_CNCopySupportedInterfaces() : NULL;
 }
 

@@ -72,6 +72,7 @@
 @property (nonatomic, readonly) BOOL lowPowerMode;
 @property (nonatomic, readonly) NSString *buildID;
 @property (nonatomic, readonly) NSString *uniqueID;
+@property (nonatomic, readonly) NSString *deviceName;
 
 /** Danh sách bundle ID mục tiêu. Nếu rỗng = không inject vào app nào. */
 @property (nonatomic, readonly) NSArray *targetBundles;

@@ -59,4 +59,31 @@
     };
 }
 
++ (NSDictionary *)iosVersionOptionsForProductType:(NSString *)productType {
+    NSDictionary *all = [self iosVersionOptions];
+    // iPhone 8/X (iPhone10,*): max iOS 16.7
+    if ([productType hasPrefix:@"iPhone10,"]) {
+        return @{
+            @"iOS 15.8":  all[@"iOS 15.8"],
+            @"iOS 16.7":  all[@"iOS 16.7"]
+        };
+    }
+    // iPhone 11 (iPhone12,*): max iOS 17.7
+    if ([productType hasPrefix:@"iPhone12,"]) {
+        return @{
+            @"iOS 15.8":  all[@"iOS 15.8"],
+            @"iOS 16.7":  all[@"iOS 16.7"],
+            @"iOS 17.5":  all[@"iOS 17.5"],
+            @"iOS 17.6":  all[@"iOS 17.6"],
+            @"iOS 17.7":  all[@"iOS 17.7"]
+        };
+    }
+    // iPhone 12-14 (iPhone13,*/iPhone14,*): max iOS 18.2
+    if ([productType hasPrefix:@"iPhone13,"] || [productType hasPrefix:@"iPhone14,"]) {
+        return all;
+    }
+    // iPhone 15+ (iPhone15,*/iPhone16,*): all versions
+    return all;
+}
+
 @end

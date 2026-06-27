@@ -60,7 +60,9 @@
             NSArray *keys = @[@"marketingName", @"productType", @"hardwareModel", @"modelNumber", @"chipId", @"cpuArchitecture", @"capacityGB", @"screenWidth", @"screenHeight", @"screenScale", @"screenInches", @"ppi", @"boardId", @"deviceClass"];
             NSArray *labels = @[@"Model", @"Product", @"Hardware", @"Model No", @"Chip", @"CPU", @"Storage", @"Width", @"Height", @"Scale", @"Inches", @"PPI", @"Board ID", @"Class"];
             id v = p[keys[i.row]] ?: @"-";
-            return [self cellWithTitle:labels[i.row] detail:[v description]];
+            NSString *detail = [v description];
+            if (i.row == 0 && self.config.deviceName.length) detail = [NSString stringWithFormat:@"%@ → %@", detail, self.config.deviceName];
+            return [self cellWithTitle:labels[i.row] detail:detail];
         }
         case 2: {
             NSArray *vals = @[self.config.carrierName ?: @"", self.config.carrierMCC ?: @"", self.config.carrierMNC ?: @"", self.config.radioTech ?: @""];

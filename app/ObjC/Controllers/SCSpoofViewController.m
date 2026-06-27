@@ -340,16 +340,55 @@
 
 - (void)showCarrierPresets {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Carrier Preset" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    NSArray *names = @[@"Viettel 4G", @"Mobifone 4G", @"Vinaphone 4G", @"Viettel 5G"];
+    NSArray *names = @[
+        @"Viettel 4G", @"Mobifone 4G", @"Vinaphone 4G", @"Viettel 5G",
+        @"T-Mobile US", @"AT&T US", @"Verizon US", @"Sprint US",
+        @"Vodafone UK", @"O2 UK", @"EE UK", @"Three UK",
+        @"Orange FR", @"SFR FR", @"Bouygues FR",
+        @"Docomo JP", @"SoftBank JP", @"au JP",
+        @"SK Telecom KR", @"KT KR", @"LG U+ KR",
+        @"Movistar ES", @"Vodafone ES", @"Orange ES",
+        @"Telstra AU", @"Optus AU",
+        @"Jio IN", @"Airtel IN", @"Vi IN",
+        @"China Mobile", @"China Unicom", @"China Telecom"
+    ];
     NSArray *presets = @[
         @[@"Viettel",@"452",@"04",@"vn",@"CTRadioAccessTechnologyLTE"],
         @[@"Mobifone",@"452",@"01",@"vn",@"CTRadioAccessTechnologyLTE"],
         @[@"Vinaphone",@"452",@"02",@"vn",@"CTRadioAccessTechnologyLTE"],
-        @[@"Viettel",@"452",@"04",@"vn",@"CTRadioAccessTechnologyNRNSA"]
+        @[@"Viettel",@"452",@"04",@"vn",@"CTRadioAccessTechnologyNRNSA"],
+        @[@"T-Mobile",@"310",@"260",@"us",@"CTRadioAccessTechnologyLTE"],
+        @[@"AT&T",@"310",@"410",@"us",@"CTRadioAccessTechnologyLTE"],
+        @[@"Verizon",@"311",@"480",@"us",@"CTRadioAccessTechnologyLTE"],
+        @[@"Sprint",@"310",@"120",@"us",@"CTRadioAccessTechnologyLTE"],
+        @[@"Vodafone",@"234",@"15",@"gb",@"CTRadioAccessTechnologyLTE"],
+        @[@"O2",@"234",@"10",@"gb",@"CTRadioAccessTechnologyLTE"],
+        @[@"EE",@"234",@"30",@"gb",@"CTRadioAccessTechnologyLTE"],
+        @[@"Three",@"234",@"20",@"gb",@"CTRadioAccessTechnologyLTE"],
+        @[@"Orange",@"208",@"01",@"fr",@"CTRadioAccessTechnologyLTE"],
+        @[@"SFR",@"208",@"10",@"fr",@"CTRadioAccessTechnologyLTE"],
+        @[@"Bouygues",@"208",@"20",@"fr",@"CTRadioAccessTechnologyLTE"],
+        @[@"NTT DoCoMo",@"440",@"10",@"jp",@"CTRadioAccessTechnologyLTE"],
+        @[@"SoftBank",@"440",@"20",@"jp",@"CTRadioAccessTechnologyLTE"],
+        @[@"au",@"440",@"50",@"jp",@"CTRadioAccessTechnologyLTE"],
+        @[@"SK Telecom",@"450",@"05",@"kr",@"CTRadioAccessTechnologyLTE"],
+        @[@"KT",@"450",@"02",@"kr",@"CTRadioAccessTechnologyLTE"],
+        @[@"LG U+",@"450",@"06",@"kr",@"CTRadioAccessTechnologyLTE"],
+        @[@"Movistar",@"214",@"07",@"es",@"CTRadioAccessTechnologyLTE"],
+        @[@"Vodafone",@"214",@"01",@"es",@"CTRadioAccessTechnologyLTE"],
+        @[@"Orange",@"214",@"03",@"es",@"CTRadioAccessTechnologyLTE"],
+        @[@"Telstra",@"505",@"01",@"au",@"CTRadioAccessTechnologyLTE"],
+        @[@"Optus",@"505",@"02",@"au",@"CTRadioAccessTechnologyLTE"],
+        @[@"Jio",@"404",@"857",@"in",@"CTRadioAccessTechnologyLTE"],
+        @[@"Airtel",@"404",@"10",@"in",@"CTRadioAccessTechnologyLTE"],
+        @[@"Vi",@"404",@"20",@"in",@"CTRadioAccessTechnologyLTE"],
+        @[@"China Mobile",@"460",@"00",@"cn",@"CTRadioAccessTechnologyLTE"],
+        @[@"China Unicom",@"460",@"01",@"cn",@"CTRadioAccessTechnologyLTE"],
+        @[@"China Telecom",@"460",@"11",@"cn",@"CTRadioAccessTechnologyLTE"]
     ];
     for (NSUInteger j = 0; j < names.count; j++) {
         [alert addAction:[UIAlertAction actionWithTitle:names[j] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-            self.carrierPresetIndex = j;
+            self.carrierPresetIndex = (NSInteger)j;
             self.config.carrierName = presets[j][0];
             self.config.carrierMCC = presets[j][1];
             self.config.carrierMNC = presets[j][2];
@@ -386,7 +425,7 @@
 - (void)showSystemPicker:(NSInteger)row {
     if (row == 0) {
         // iOS Version picker
-        NSDictionary *versions = [SCDevicePresetStore iosVersionOptions];
+        NSDictionary *versions = [SCDevicePresetStore iosVersionOptionsForProductType:self.config.productType];
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"iOS Version" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
         for (NSString *key in [versions.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
             NSDictionary *info = versions[key];

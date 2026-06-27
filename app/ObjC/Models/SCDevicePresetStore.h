@@ -6,4 +6,5 @@
 + (NSDictionary *)randomPreset;
 + (NSArray<NSNumber *> *)storageOptionsForProductType:(NSString *)productType;
 + (NSDictionary *)iosVersionOptions;
++ (NSDictionary *)iosVersionOptionsForProductType:(NSString *)productType;
 @end

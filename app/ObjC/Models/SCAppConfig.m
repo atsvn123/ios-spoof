@@ -71,6 +71,7 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.totalStorage = d[@"totalStorage"] ? [d[@"totalStorage"] unsignedIntegerValue] : 0;
     self.freeStorage = d[@"freeStorage"] ? [d[@"freeStorage"] unsignedIntegerValue] : 0;
     self.lowPowerMode = d[@"lowPowerMode"] ? [d[@"lowPowerMode"] boolValue] : NO;
+    self.deviceName = d[@"deviceName"] ?: @"";
 }
 
 - (void)save {
@@ -117,6 +118,7 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"totalStorage"] = @(self.totalStorage);
     d[@"freeStorage"] = @(self.freeStorage);
     d[@"lowPowerMode"] = @(self.lowPowerMode);
+    d[@"deviceName"] = self.deviceName ?: @"";
     [d writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }
@@ -172,8 +174,8 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     NSArray *storageOpts = [SCDevicePresetStore storageOptionsForProductType:preset[@"productType"]];
     self.totalStorage = [storageOpts[arc4random_uniform((uint32_t)storageOpts.count)] unsignedIntegerValue];
     self.freeStorage = self.totalStorage / (2 + arc4random_uniform(3)); // 33-50% free
-    // Auto iOS version + build ID
-    NSDictionary *iosVersions = [SCDevicePresetStore iosVersionOptions];
+    // Auto iOS version + build ID (preset-aware)
+    NSDictionary *iosVersions = [SCDevicePresetStore iosVersionOptionsForProductType:preset[@"productType"]];
     NSArray *iosKeys = iosVersions.allKeys;
     NSString *iosKey = iosKeys[arc4random_uniform((uint32_t)iosKeys.count)];
     NSDictionary *iosInfo = iosVersions[iosKey];

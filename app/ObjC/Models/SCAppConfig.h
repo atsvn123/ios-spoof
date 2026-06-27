@@ -61,6 +61,9 @@ extern NSString * const SCPreferencesChangedNotification;
 // Power state
 @property (nonatomic) BOOL lowPowerMode;
 
+// Custom device name (overrides marketingName)
+@property (nonatomic, copy) NSString *deviceName;
+
 + (instancetype)shared;
 - (void)load;
 - (void)save;

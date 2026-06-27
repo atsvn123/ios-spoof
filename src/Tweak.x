@@ -4,7 +4,6 @@
 #import <objc/runtime.h>
 #import <sys/sysctl.h>
 #import <sys/stat.h>
-#import <sys/attr.h>
 #import <sys/utsname.h>
 #import <sys/mount.h>
 #import <sys/statvfs.h>
@@ -21,10 +20,6 @@
 
 #ifndef HW_MEMSIZE
 #define HW_MEMSIZE 24
-#endif
-
-#ifndef ATTR_VOL_SPACEAVAIL
-#define ATTR_VOL_SPACEAVAIL 0x00000080
 #endif
 
 // ============================================================================
@@ -91,6 +86,7 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
 }
 - (NSString *)name {
     if (SC_ON() && P()) {
+        if (CFG().deviceName.length) return CFG().deviceName;
         return [NSString stringWithFormat:@"%@'s iPhone", P().marketingName ?: @"iPhone"];
     }
     return %orig;
@@ -217,22 +213,6 @@ static int sc_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void
     return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
 }
 
-static kern_return_t (*orig_host_statistics64)(host_t, host_flavor_t, host_info64_t, mach_msg_type_number_t *);
-static kern_return_t sc_host_statistics64(host_t host, host_flavor_t flavor, host_info64_t host_info64_out, mach_msg_type_number_t *host_info64_outCnt) {
-    kern_return_t r = orig_host_statistics64(host, flavor, host_info64_out, host_info64_outCnt);
-    if (r == KERN_SUCCESS && SC_ON() && P() && flavor == HOST_VM_INFO64 && host_info64_out) {
-        vm_statistics64_data_t *vm = (vm_statistics64_data_t *)host_info64_out;
-        uint64_t pages = SCRamBytesForPreset() / (uint64_t)vm_page_size;
-        if (pages > 0) {
-            vm->free_count = (natural_t)(pages / 4);
-            vm->active_count = (natural_t)(pages / 3);
-            vm->inactive_count = (natural_t)(pages / 5);
-            vm->wire_count = (natural_t)(pages / 6);
-        }
-    }
-    return r;
-}
-
 // ============================================================================
 //  4. IOKit
 // ============================================================================
@@ -308,29 +288,11 @@ static int sc_statvfs(const char *path, struct statvfs *buf) {
     return r;
 }
 
-static int (*orig_getattrlist)(const char *, struct attrlist *, void *, size_t, unsigned long);
-static int sc_getattrlist(const char *path, struct attrlist *attrList, void *attrBuf, size_t attrBufSize, unsigned long options) {
-    int r = orig_getattrlist(path, attrList, attrBuf, attrBufSize, options);
-    if (r == 0 && SC_ON() && attrList && attrBuf && attrBufSize >= sizeof(uint32_t) + sizeof(uint64_t)) {
-        unsigned long long total = SCFakeTotalBytes();
-        unsigned long long free = SCFakeFreeBytes();
-        if (total > 0 && free > 0) {
-            uint8_t *cursor = (uint8_t *)attrBuf + sizeof(uint32_t);
-            uint8_t *end = (uint8_t *)attrBuf + attrBufSize;
-            uint32_t vol = attrList->volattr;
-            uint32_t attrs[] = { ATTR_VOL_SIZE, ATTR_VOL_SPACEFREE, ATTR_VOL_SPACEAVAIL };
-            for (NSUInteger i = 0; i < sizeof(attrs) / sizeof(attrs[0]); i++) {
-                if (!(vol & attrs[i])) continue;
-                if (cursor + sizeof(uint64_t) > end) break;
-                uint64_t *value = (uint64_t *)cursor;
-                if (attrs[i] == ATTR_VOL_SIZE) *value = total;
-                else *value = free;
-                cursor += sizeof(uint64_t);
-            }
-        }
-    }
-    return r;
-}
+// getattrlist hook removed: buffer layout is complex and caused target app crashes.
+// statfs + statvfs + NSFileManager + NSURL already cover most storage detection APIs.
+
+// host_statistics64 hook removed: vm_page_size may be 0 at hook time, causing division by zero.
+// NSProcessInfo.physicalMemory + sysctl(hw.memsize) already cover RAM detection.
 
 %hook NSFileManager
 - (NSDictionary *)attributesOfFileSystemForPath:(NSString *)path error:(NSError **)error {
@@ -420,37 +382,36 @@ static int sc_getattrlist(const char *path, struct attrlist *attrList, void *att
 //  4e. User-Agent spoofing (NSMutableURLRequest / NSURLSession)
 // ============================================================================
 
-static UIWindow *SCStatusOverlayWindow;
 static UILabel *SCStatusOverlayLabel;
 
 static void SCInstallStatusOverlay(UIWindow *window) {
     if (!SC_ON() || !window || !P()) return;
-    if (!SCStatusOverlayWindow) {
-        SCStatusOverlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        SCStatusOverlayWindow.windowLevel = UIWindowLevelStatusBar + 10;
-        SCStatusOverlayWindow.backgroundColor = [UIColor clearColor];
-        SCStatusOverlayWindow.userInteractionEnabled = NO;
-        UIViewController *vc = [UIViewController new];
-        vc.view.backgroundColor = [UIColor clearColor];
-        SCStatusOverlayWindow.rootViewController = vc;
-        SCStatusOverlayWindow.hidden = NO;
-        CGFloat top = 20;
-        if (@available(iOS 11.0, *)) top = MAX(window.safeAreaInsets.top, (CGFloat)20);
-        SCStatusOverlayLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, SCStatusOverlayWindow.bounds.size.width, top)];
-        SCStatusOverlayLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleBottomMargin;
-        SCStatusOverlayLabel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.86];
+    if (window.windowLevel > UIWindowLevelNormal) return;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        SCStatusOverlayLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        SCStatusOverlayLabel.tag = 55123;
+        SCStatusOverlayLabel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.78];
         SCStatusOverlayLabel.textColor = [UIColor whiteColor];
-        SCStatusOverlayLabel.font = [UIFont systemFontOfSize:11 weight:UIFontWeightSemibold];
+        SCStatusOverlayLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
         SCStatusOverlayLabel.textAlignment = NSTextAlignmentCenter;
         SCStatusOverlayLabel.numberOfLines = 1;
-        [vc.view addSubview:SCStatusOverlayLabel];
+        SCStatusOverlayLabel.userInteractionEnabled = NO;
+        SCStatusOverlayLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleBottomMargin;
+    });
+    if (!SCStatusOverlayLabel.superview) {
+        [window addSubview:SCStatusOverlayLabel];
     }
+    CGFloat top = 0;
+    if (@available(iOS 11.0, *)) top = window.safeAreaInsets.top;
+    if (top < 20) top = 20;
+    SCStatusOverlayLabel.frame = CGRectMake(0, 0, window.bounds.size.width, top);
     NSString *ssid = CFG().wifiSSID.length ? CFG().wifiSSID : @"MyWiFi";
-    NSString *network = CFG().networkMode == 1 ? [NSString stringWithFormat:@"WiFi %@", ssid] : (CFG().networkMode == 2 ? @"Cellular" : @"Network Default");
-    NSString *storage = SCFakeTotalBytes() > 0 ? [NSString stringWithFormat:@"%lluGB/%lluGB", SCFakeFreeBytes() / 1024ULL / 1024ULL / 1024ULL, SCFakeTotalBytes() / 1024ULL / 1024ULL / 1024ULL] : @"Storage Auto";
-    NSString *ram = [NSString stringWithFormat:@"%lluGB RAM", SCRamBytesForPreset() / 1024ULL / 1024ULL / 1024ULL];
-    SCStatusOverlayLabel.text = [NSString stringWithFormat:@"iOSSpoof active | %@ | %@ | %@ | %@", P().marketingName ?: P().productType ?: @"iPhone", network, storage, ram];
-    SCStatusOverlayWindow.hidden = NO;
+    NSString *network = CFG().networkMode == 1 ? [NSString stringWithFormat:@"WiFi %@", ssid] : (CFG().networkMode == 2 ? @"Cellular" : @"Net");
+    NSString *storage = SCFakeTotalBytes() > 0 ? [NSString stringWithFormat:@"%llu/%lluGB", SCFakeFreeBytes() / 1024ULL / 1024ULL / 1024ULL, SCFakeTotalBytes() / 1024ULL / 1024ULL / 1024ULL] : @"";
+    NSString *ram = [NSString stringWithFormat:@"%lluGB", SCRamBytesForPreset() / 1024ULL / 1024ULL / 1024ULL];
+    SCStatusOverlayLabel.text = [NSString stringWithFormat:@" %@ | %@ | %@ | %@ ", P().marketingName ?: P().productType ?: @"iPhone", network, storage, ram];
+    [window bringSubviewToFront:SCStatusOverlayLabel];
 }
 
 %hook UIWindow
@@ -464,12 +425,12 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 }
 - (void)layoutSubviews {
     %orig;
-    if (SCStatusOverlayWindow && SCStatusOverlayLabel) {
-        SCStatusOverlayWindow.frame = [UIScreen mainScreen].bounds;
+    if (SCStatusOverlayLabel) {
         CGFloat top = 0;
         if (@available(iOS 11.0, *)) top = self.safeAreaInsets.top;
         if (top < 20) top = 20;
-        SCStatusOverlayLabel.frame = CGRectMake(0, 0, SCStatusOverlayWindow.bounds.size.width, top);
+        SCStatusOverlayLabel.frame = CGRectMake(0, 0, self.bounds.size.width, top);
+        [self bringSubviewToFront:SCStatusOverlayLabel];
     }
 }
 %end
@@ -725,7 +686,6 @@ static NSSet *sc_protected_bundles(void) {
         // C function hooks
         MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
         MSHookFunction((void *)&sysctl, (void *)sc_sysctl, (void **)&orig_sysctl);
-        MSHookFunction((void *)&host_statistics64, (void *)sc_host_statistics64, (void **)&orig_host_statistics64);
 
         void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
         if (iokit) {
@@ -742,6 +702,5 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
         MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
         MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
-        MSHookFunction((void *)&getattrlist, (void *)sc_getattrlist, (void **)&orig_getattrlist);
     }
 }

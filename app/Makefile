@@ -1,5 +1,5 @@
 ARCHS = arm64 arm64e
-TARGET = iphone:clang:latest:16.0
+TARGET = iphone:clang:latest:14.0
 THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
@@ -32,6 +32,11 @@ iOSSpoofApp_INSTALL_PATH = /Applications
 iOSSpoofApp_CODESIGN_FLAGS = -S
 iOSSpoofApp_INFO_PLIST = iOSSpoofApp-Info.plist
 iOSSpoofApp_BUNDLE_NAME = iOSSpoof
-iOSSpoofApp_RESOURCE_DIRS = Assets.xcassets
+iOSSpoofApp_RESOURCE_FILES = \
+	Assets.xcassets/AppIcon.appiconset/Icon-App-60x60@2x.png \
+	Assets.xcassets/AppIcon.appiconset/Icon-App-60x60@3x.png \
+	Assets.xcassets/AppIcon.appiconset/Icon-App-76x76@1x.png \
+	Assets.xcassets/AppIcon.appiconset/Icon-App-76x76@2x.png \
+	Assets.xcassets/AppIcon.appiconset/Icon-App-83.5x83.5@2x.png
 
 include $(THEOS_MAKE_PATH)/application.mk

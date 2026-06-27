@@ -4,19 +4,15 @@ struct CellularTabView: View {
     @StateObject private var config = SpoofConfig.shared
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
-                Section {
+                Section(header: Text("Nhà mạng"), footer: Text("Hook CTTelephonyNetworkInfo để spoof carrier info.")) {
                     HStack {
                         Text("Carrier Name")
                         Spacer()
                         TextField("Viettel", text: $config.carrierName)
                             .multilineTextAlignment(.trailing)
                     }
-                } header: {
-                    Text("Nhà mạng")
-                } footer: {
-                    Text("Hook CTTelephonyNetworkInfo để spoof carrier info.")
                 }
                 
                 Section(header: Text("MCC/MNC")) {
@@ -45,7 +41,7 @@ struct CellularTabView: View {
                     }
                 }
                 
-                Section {
+                Section(header: Text("Loại mạng"), footer: Text("Spoof loại mạng di động. App sẽ thấy 4G/5G thay vì WiFi.")) {
                     Picker("Radio Access Technology", selection: $config.radioTech) {
                         Text("5G NR (NSA)").tag("CTRadioAccessTechnologyNRNSA")
                         Text("5G NR (SA)").tag("CTRadioAccessTechnologyNR")
@@ -55,10 +51,6 @@ struct CellularTabView: View {
                         Text("2G EDGE").tag("CTRadioAccessTechnologyEdge")
                         Text("2G GPRS").tag("CTRadioAccessTechnologyGPRS")
                     }
-                } header: {
-                    Text("Loại mạng")
-                } footer: {
-                    Text("Spoof loại mạng di động. App sẽ thấy 4G/5G thay vì WiFi.")
                 }
                 
                 // Quick carriers
@@ -75,12 +67,10 @@ struct CellularTabView: View {
                     QuickCarrierRow(name: "SoftBank (JP)", mcc: "440", mnc: "20", iso: "jp")
                 }
                 
-                Section {
-                    NavigationLink("WiFi → 4G Spoofing") {
+                Section(footer: Text("Làm cho app tin rằng bạn đang dùng 4G thay vì WiFi.")) {
+                    NavigationLink(destination:
                         WiFiTo4GView()
-                    }
-                } footer: {
-                    Text("Làm cho app tin rằng bạn đang dùng 4G thay vì WiFi.")
+                    ) { Text("WiFi → 4G Spoofing") }
                 }
             }
             .navigationTitle("Cellular")

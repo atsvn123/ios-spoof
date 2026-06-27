@@ -5,9 +5,9 @@ struct DisplayTabView: View {
     @StateObject private var presetManager = PresetManager.shared
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
-                Section {
+                Section(header: Text("Thông tin màn hình"), footer: Text("Spoof dựa trên device preset đã chọn.")) {
                     if let preset = presetManager.selectedPreset {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
@@ -34,28 +34,24 @@ struct DisplayTabView: View {
                         }
                         .font(.caption)
                     }
-                } header: {
-                    Text("Thông tin màn hình")
-                } footer: {
-                    Text("Spoof dựa trên device preset đã chọn.")
                 }
                 
                 Section {
-                    NavigationLink("Screen Size Override") {
+                    NavigationLink(destination:
                         ScreenSizeOverrideView()
-                    }
+                    ) { Text("Screen Size Override") }
                 }
                 
                 Section {
-                    NavigationLink("Brightness Spoofing") {
+                    NavigationLink(destination:
                         BrightnessSpoofView()
-                    }
+                    ) { Text("Brightness Spoofing") }
                 }
                 
                 Section {
-                    NavigationLink("Display Scale") {
+                    NavigationLink(destination:
                         DisplayScaleView()
-                    }
+                    ) { Text("Display Scale") }
                 }
             }
             .navigationTitle("Display")
@@ -70,15 +66,13 @@ struct ScreenSizeOverrideView: View {
     
     var body: some View {
         List {
-            Section {
+            Section(header: Text("Override kích thước màn hình")) {
                 TextField("Width", text: $width)
                     .keyboardType(.numberPad)
                 TextField("Height", text: $height)
                     .keyboardType(.numberPad)
                 TextField("Scale", text: $scale)
                     .keyboardType(.numberPad)
-            } header: {
-                Text("Override kích thước màn hình")
             }
             
             Section {
@@ -97,12 +91,10 @@ struct BrightnessSpoofView: View {
     
     var body: some View {
         List {
-            Section {
+            Section(header: Text("Brightness level")) {
                 Slider(value: $brightness, in: 0...1)
                 Text("\(Int(brightness * 100))%")
                     .foregroundColor(.secondary)
-            } header: {
-                Text("Brightness level")
             }
             
             Section {

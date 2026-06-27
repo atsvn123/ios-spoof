@@ -44,6 +44,12 @@ static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 static SCDevicePreset *P()  { return CFG().resolvedPreset; }
 static BOOL SC_ON()         { return CFG().enabled; }
 
+static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer,
+                                  CFStringRef name, const void *object,
+                                  CFDictionaryRef userInfo) {
+    [CFG() reload];
+}
+
 // ============================================================================
 //  1. CTCarrier / CTTelephonyNetworkInfo
 // ============================================================================
@@ -261,6 +267,10 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
     @autoreleasepool {
         // Chỉ hook nếu process này là target
         if (![CFG() shouldInjectForCurrentBundle]) return;
+
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+            NULL, SCNetworkPrefsChanged, CFSTR("com.iosspoof.tweak.prefs.changed"), NULL,
+            CFNotificationSuspensionBehaviorCoalesce);
 
         void *cfnet = dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork", RTLD_NOW);
         if (cfnet) {

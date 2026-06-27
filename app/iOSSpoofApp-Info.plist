@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>iOSSpoof</string>
     <key>CFBundleExecutable</key>
-    <string>iOSSpoof</string>
+    <string>iOSSpoofApp</string>
     <key>CFBundleIdentifier</key>
     <string>com.iosspoof.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -16,12 +16,32 @@
     <string>iOSSpoof</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>Icon-App-60x60</string>
+                <string>Icon-App-76x76</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <false/>
+        </dict>
+    </dict>
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>MinimumOSVersion</key>
+    <string>14.0</string>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+        <integer>2</integer>
+    </array>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>

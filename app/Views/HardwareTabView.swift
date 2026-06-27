@@ -5,10 +5,10 @@ struct HardwareTabView: View {
     @StateObject private var presetManager = PresetManager.shared
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 // Storage & RAM
-                Section {
+                Section(header: Text("Storage & RAM")) {
                     if let preset = presetManager.selectedPreset {
                         HStack {
                             Text("Storage")
@@ -17,62 +17,48 @@ struct HardwareTabView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
-                } header: {
-                    Text("Storage & RAM")
                 }
                 
                 Section {
-                    NavigationLink("Storage Override") {
+                    NavigationLink(destination:
                         StorageOverrideView()
-                    }
-                    NavigationLink("RAM Override") {
+                    ) { Text("Storage Override") }
+                    NavigationLink(destination:
                         RAMOverrideView()
-                    }
+                    ) { Text("RAM Override") }
                 }
                 
                 // Battery
-                Section {
+                Section(header: Text("Battery")) {
                     Toggle("Spoof Battery", isOn: $config.spoofBattery)
-                        .tint(.cyan)
+                        .accentColor(.cyan)
                     
                     if config.spoofBattery {
-                        NavigationLink("Battery State") {
+                        NavigationLink(destination:
                             BatteryStateView()
-                        }
+                        ) { Text("Battery State") }
                     }
-                } header: {
-                    Text("Battery")
                 }
                 
                 // Camera
-                Section {
-                    NavigationLink("Camera Capabilities") {
+                Section(header: Text("Camera"), footer: Text("Spoof camera capabilities: ultra-wide, LiDAR, ProRAW...")) {
+                    NavigationLink(destination:
                         CameraCapabilitiesView()
-                    }
-                } header: {
-                    Text("Camera")
-                } footer: {
-                    Text("Spoof camera capabilities: ultra-wide, LiDAR, ProRAW...")
+                    ) { Text("Camera Capabilities") }
                 }
                 
                 // Sensors
-                Section {
-                    NavigationLink("Sensors") {
+                Section(header: Text("Sensors"), footer: Text("LiDAR, Face ID, Touch ID, Barometer, Magnetometer...")) {
+                    NavigationLink(destination:
                         SensorsView()
-                    }
-                } header: {
-                    Text("Sensors")
-                } footer: {
-                    Text("LiDAR, Face ID, Touch ID, Barometer, Magnetometer...")
+                    ) { Text("Sensors") }
                 }
                 
                 // CPU
-                Section {
-                    NavigationLink("CPU Info") {
+                Section(header: Text("CPU & Chip")) {
+                    NavigationLink(destination:
                         CPUInfoView()
-                    }
-                } header: {
-                    Text("CPU & Chip")
+                    ) { Text("CPU Info") }
                 }
             }
             .navigationTitle("Hardware")
@@ -167,7 +153,7 @@ struct BatteryStateView: View {
             
             Section {
                 Toggle("Low Power Mode", isOn: $lowPowerMode)
-                    .tint(.orange)
+                    .accentColor(.orange)
             }
             
             Section {
@@ -190,24 +176,20 @@ struct CameraCapabilitiesView: View {
     
     var body: some View {
         List {
-            Section {
+            Section(header: Text("Camera Hardware")) {
                 Toggle("Ultra-wide Camera", isOn: $hasUltraWide)
-                    .tint(.cyan)
+                    .accentColor(.cyan)
                 Toggle("Telephoto Camera", isOn: $hasTelephoto)
-                    .tint(.cyan)
+                    .accentColor(.cyan)
                 Toggle("LiDAR Sensor", isOn: $hasLiDAR)
-                    .tint(.cyan)
-            } header: {
-                Text("Camera Hardware")
+                    .accentColor(.cyan)
             }
             
-            Section {
+            Section(header: Text("Features")) {
                 Toggle("ProRAW Support", isOn: $hasProRAW)
-                    .tint(.cyan)
+                    .accentColor(.cyan)
                 Toggle("Cinematic Mode", isOn: $hasCinematicMode)
-                    .tint(.cyan)
-            } header: {
-                Text("Features")
+                    .accentColor(.cyan)
             }
             
             Section {
@@ -230,24 +212,20 @@ struct SensorsView: View {
     
     var body: some View {
         List {
-            Section {
+            Section(header: Text("Biometrics")) {
                 Toggle("Face ID", isOn: $hasFaceID)
-                    .tint(.cyan)
+                    .accentColor(.cyan)
                 Toggle("Touch ID", isOn: $hasTouchID)
-                    .tint(.cyan)
-            } header: {
-                Text("Biometrics")
+                    .accentColor(.cyan)
             }
             
-            Section {
+            Section(header: Text("Sensors")) {
                 Toggle("LiDAR Scanner", isOn: $hasLiDAR)
-                    .tint(.cyan)
+                    .accentColor(.cyan)
                 Toggle("Barometer", isOn: $hasBarometer)
-                    .tint(.cyan)
+                    .accentColor(.cyan)
                 Toggle("Magnetometer", isOn: $hasMagnetometer)
-                    .tint(.cyan)
-            } header: {
-                Text("Sensors")
+                    .accentColor(.cyan)
             }
             
             Section {
@@ -267,7 +245,7 @@ struct CPUInfoView: View {
     var body: some View {
         List {
             if let preset = presetManager.selectedPreset {
-                Section {
+                Section(header: Text("CPU & Chip Info")) {
                     HStack {
                         Text("Chip ID")
                         Spacer()
@@ -292,8 +270,6 @@ struct CPUInfoView: View {
                         Text(preset.boardId)
                             .foregroundColor(.secondary)
                     }
-                } header: {
-                    Text("CPU & Chip Info")
                 }
             }
             

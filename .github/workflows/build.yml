@@ -61,6 +61,7 @@ jobs:
         run: |
           export THEOS=$HOME/theos
           export THEOS_PACKAGE_SCHEME=rootless
+          chmod +x layout/DEBIAN/postinst layout/DEBIAN/postrm || true
           make clean
           make package FINALPACKAGE=1
 

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct AppsTabView: View {
     @StateObject private var viewModel = AppsViewModel.shared
-    @StateObject private var config = SpoofConfig.shared
     @State private var searchText = ""
     @State private var showSystemApps = false
 
@@ -18,7 +17,7 @@ struct AppsTabView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 Section {
                     HStack {
@@ -30,19 +29,23 @@ struct AppsTabView: View {
                     }
 
                     Button {
-                        viewModel.selectAll()
+                        viewModel.select(filteredApps)
                     } label: {
-                        Label("Chọn tất cả", systemImage: "checkmark.circle.fill")
+                        Label("Chọn tất cả đang hiển thị", systemImage: "checkmark.circle.fill")
                     }
 
-                    Button(role: .destructive) {
+                    Button {
                         viewModel.deselectAll()
                     } label: {
                         Label("Bỏ chọn tất cả", systemImage: "xmark.circle")
                     }
+                    .foregroundColor(.red)
                 }
 
                 Section {
+                    TextField("Tìm kiếm app...", text: $searchText)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
                     Toggle("Hiển thị app hệ thống", isOn: $showSystemApps)
                 }
 
@@ -55,12 +58,19 @@ struct AppsTabView: View {
                 }
             }
             .navigationTitle("Ứng dụng")
-            .searchable(text: $searchText, prompt: "Tìm kiếm app...")
-            .refreshable {
-                viewModel.loadApps()
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        viewModel.loadApps()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
             }
             .overlay {
-                if viewModel.apps.isEmpty {
+                if viewModel.isLoading && viewModel.apps.isEmpty {
+                    ProgressView("Đang tải ứng dụng...")
+                } else if viewModel.apps.isEmpty {
                     VStack(spacing: 12) {
                         Image(systemName: "app.dashed")
                             .font(.system(size: 48))
@@ -124,8 +134,4 @@ struct AppRowView: View {
         }
         .buttonStyle(.plain)
     }
-}
-
-#Preview {
-    AppsTabView()
 }

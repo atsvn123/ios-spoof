@@ -4,13 +4,12 @@ struct StatusTabView: View {
     @StateObject private var config = SpoofConfig.shared
     @State private var showRandomizeConfirm = false
     @State private var showRespringConfirm = false
-    @State private var hasIDCache = false
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 // MARK: - Master Status
-                Section {
+                Section(header: Text("Trạng thái"), footer: Text("Bật/tắt spoofing toàn bộ. Chỉ ảnh hưởng đến app đã chọn trong tab Apps.")) {
                     HStack {
                         Image(systemName: config.enabled ? "checkmark.shield.fill" : "xmark.shield.fill")
                             .foregroundColor(config.enabled ? .green : .red)
@@ -25,12 +24,22 @@ struct StatusTabView: View {
                         Spacer()
                         Toggle("", isOn: $config.enabled)
                             .labelsHidden()
-                            .tint(.cyan)
+                            .accentColor(.cyan)
                     }
-                } header: {
-                    Text("Trạng thái")
-                } footer: {
-                    Text("Bật/tắt spoofing toàn bộ. Chỉ ảnh hưởng đến app đã chọn trong tab Apps.")
+
+                    if config.enabled && config.targetBundles.isEmpty {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Chưa chọn app mục tiêu")
+                                    .fontWeight(.semibold)
+                                Text("Vào tab Apps và chọn ít nhất một app. Nếu không, tweak sẽ không inject vào đâu cả.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
                 }
 
                 // MARK: - Randomize All
@@ -126,17 +135,11 @@ struct StatusTabView: View {
                         InfoRow(label: "Bundle", value: firstBundle)
                             .font(.caption)
                         InfoRow(label: "UDID", value: ids["udid"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "Serial", value: ids["serial"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "ECID", value: ids["ecid"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "IMEI", value: ids["imei"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "MAC", value: ids["mac"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "IDFA", value: ids["idfa"] ?? "—")
-                            .textSelection(.enabled)
                     } else {
                         if config.targetBundles.isEmpty {
                             Text("Chưa chọn app mục tiêu")
@@ -154,9 +157,9 @@ struct StatusTabView: View {
                     }
 
                     if config.targetBundles.count > 1 {
-                        NavigationLink {
+                        NavigationLink(destination:
                             AllIDsView()
-                        } label: {
+                        ) {
                             HStack {
                                 Image(systemName: "list.bullet")
                                 Text("Xem tất cả (\(config.targetBundles.count) app)")
@@ -228,34 +231,25 @@ struct StatusTabView: View {
                 }
             }
             .navigationTitle("Status")
-            .onAppear {
-                hasIDCache = FileManager.default.fileExists(atPath: idCachePath)
+            .actionSheet(isPresented: $showRandomizeConfirm) {
+                ActionSheet(
+                    title: Text("Randomize tất cả thông số?"),
+                    message: Text("Sẽ sinh ngẫu nhiên device model, carrier, GPS, IDs. IDs cũ sẽ bị xóa. Cần Respring để áp dụng."),
+                    buttons: [
+                        .destructive(Text("Randomize All")) { config.randomizeAll() },
+                        .cancel(Text("Hủy"))
+                    ]
+                )
             }
-            .confirmationDialog("Randomize tất cả thông số?", isPresented: $showRandomizeConfirm) {
-                Button("Randomize All", role: .destructive) {
-                    config.randomizeAll()
-                }
-                Button("Hủy", role: .cancel) {}
-            } message: {
-                Text("Sẽ sinh ngẫu nhiên device model, carrier, GPS, IDs. IDs cũ sẽ bị xóa. Cần Respring để áp dụng.")
-            }
-            .confirmationDialog("Respring để áp dụng?", isPresented: $showRespringConfirm) {
-                Button("Respring", role: .destructive) {
-                    config.respring()
-                }
-                Button("Hủy", role: .cancel) {}
-            } message: {
-                Text("SpringBoard sẽ khởi động lại. Mọi thay đổi sẽ có hiệu lực.")
+            .alert(isPresented: $showRespringConfirm) {
+                Alert(
+                    title: Text("Respring để áp dụng?"),
+                    message: Text("SpringBoard sẽ khởi động lại. Mọi thay đổi sẽ có hiệu lực."),
+                    primaryButton: .destructive(Text("Respring")) { config.respring() },
+                    secondaryButton: .cancel(Text("Hủy"))
+                )
             }
         }
-    }
-
-    private var idCachePath: String {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: "/var/jb/var/mobile/Library/Preferences") {
-            return "/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist"
-        }
-        return "/var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist"
     }
 
     private func radioTechName(_ raw: String) -> String {
@@ -319,17 +313,11 @@ struct AllIDsView: View {
                 if let ids = config.cachedIDs(for: bundle) {
                     Section(header: Text(bundle)) {
                         InfoRow(label: "UDID", value: ids["udid"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "Serial", value: ids["serial"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "ECID", value: ids["ecid"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "IMEI", value: ids["imei"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "MAC", value: ids["mac"] ?? "—")
-                            .textSelection(.enabled)
                         InfoRow(label: "IDFA", value: ids["idfa"] ?? "—")
-                            .textSelection(.enabled)
                     }
                 } else {
                     Section(header: Text(bundle)) {
@@ -343,8 +331,4 @@ struct AllIDsView: View {
         .navigationTitle("All IDs")
         .navigationBarTitleDisplayMode(.inline)
     }
-}
-
-#Preview {
-    StatusTabView()
 }

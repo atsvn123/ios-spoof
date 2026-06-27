@@ -423,7 +423,7 @@ static int sc_uname(struct utsname *buf) {
 
         // Đăng ký lắng nghe thay đổi preferences
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
-            NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs-changed"), NULL,
+            NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs.changed"), NULL,
             CFNotificationSuspensionBehaviorCoalesce);
 
         if ([[NSUserDefaults standardUserDefaults] boolForKey:@"iOSSpoofDebugLog"]) {

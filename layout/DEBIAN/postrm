@@ -1,0 +1,11 @@
+#!/bin/sh
+
+if [ -x "/var/jb/usr/bin/uicache" ]; then
+    /var/jb/usr/bin/uicache -a >/dev/null 2>&1 || true
+elif [ -x "/usr/bin/uicache" ]; then
+    /usr/bin/uicache -a >/dev/null 2>&1 || true
+fi
+
+killall -9 lsd >/dev/null 2>&1 || true
+
+exit 0

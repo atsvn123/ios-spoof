@@ -7,14 +7,12 @@ struct DeviceTabView: View {
     @State private var showModelPicker = false
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
                 // Master Toggle
-                Section {
+                Section(footer: Text("Bật để kích hoạt spoofing cho các app đã chọn")) {
                     Toggle("Bật Spoof", isOn: $config.enabled)
-                        .tint(.cyan)
-                } footer: {
-                    Text("Bật để kích hoạt spoofing cho các app đã chọn")
+                        .accentColor(.cyan)
                 }
                 
                 // Device Model
@@ -35,28 +33,28 @@ struct DeviceTabView: View {
                     }
                     
                     Toggle("Ngẫu nhiên mỗi lần mở app", isOn: $config.randomizeOnLaunch)
-                        .tint(.cyan)
+                        .accentColor(.cyan)
                 }
                 
                 // Device Info Preview
                 Section(header: Text("Thông tin thiết bị")) {
-                    LabeledContent("Product Type", value: config.productType)
-                    LabeledContent("Marketing Name", value: config.marketingName)
-                    LabeledContent("Hardware Model", value: config.hardwareModel)
-                    LabeledContent("CPU Architecture", value: config.cpuArchitecture)
+                    InfoRow(label: "Product Type", value: config.productType)
+                    InfoRow(label: "Marketing Name", value: config.marketingName)
+                    InfoRow(label: "Hardware Model", value: config.hardwareModel)
+                    InfoRow(label: "CPU Architecture", value: config.cpuArchitecture)
                 }
                 
                 // Screen
                 Section(header: Text("Màn hình")) {
-                    LabeledContent("Kích thước", value: "\(config.screenWidth) x \(config.screenHeight)")
-                    LabeledContent("Scale", value: "\(config.screenScale)x")
-                    LabeledContent("Inches", value: String(format: "%.1f\"", config.screenInches))
-                    LabeledContent("PPI", value: "\(config.ppi)")
+                    InfoRow(label: "Kích thước", value: "\(config.screenWidth) x \(config.screenHeight)")
+                    InfoRow(label: "Scale", value: "\(config.screenScale)x")
+                    InfoRow(label: "Inches", value: String(format: "%.1f\"", config.screenInches))
+                    InfoRow(label: "PPI", value: "\(config.ppi)")
                 }
                 
                 // Quick Actions
                 Section {
-                    Button(role: .destructive) {
+                    Button {
                         config.resetAll()
                     } label: {
                         HStack {
@@ -64,6 +62,7 @@ struct DeviceTabView: View {
                             Text("Đặt lại mặc định")
                         }
                     }
+                    .foregroundColor(.red)
                 }
             }
             .navigationTitle("Device")
@@ -77,7 +76,7 @@ struct DeviceTabView: View {
 // MARK: - Model Picker
 
 struct ModelPickerView: View {
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) private var presentationMode
     @ObservedObject var config: SpoofConfig
     @State private var searchText = ""
 
@@ -92,11 +91,17 @@ struct ModelPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
+                Section {
+                    TextField("Tìm iPhone...", text: $searchText)
+                        .autocapitalization(.none)
+                        .disableAutocorrection(true)
+                }
+
                 Button {
                     config.productType = "random"
-                    dismiss()
+                    presentationMode.wrappedValue.dismiss()
                 } label: {
                     HStack {
                         Label("Ngẫu nhiên", systemImage: "shuffle")
@@ -112,7 +117,7 @@ struct ModelPickerView: View {
                 ForEach(filteredPresets) { preset in
                     Button {
                         config.productType = preset.productType
-                        dismiss()
+                        presentationMode.wrappedValue.dismiss()
                     } label: {
                         HStack {
                             VStack(alignment: .leading) {
@@ -133,10 +138,9 @@ struct ModelPickerView: View {
             }
             .navigationTitle("Chọn Model")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $searchText, prompt: "Tìm iPhone...")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Đóng") { dismiss() }
+                    Button("Đóng") { presentationMode.wrappedValue.dismiss() }
                 }
             }
         }

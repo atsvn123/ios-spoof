@@ -7,15 +7,11 @@ struct NetworkTabView: View {
     @State private var hasCheckedDaemon = false
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
-                Section {
+                Section(header: Text("Transparent Proxy"), footer: Text("Proxy trong suốt qua PF divert. App không phát hiện được proxy.")) {
                     Toggle("Bật Proxy", isOn: $config.proxyEnabled)
-                        .tint(.cyan)
-                } header: {
-                    Text("Transparent Proxy")
-                } footer: {
-                    Text("Proxy trong suốt qua PF divert. App không phát hiện được proxy.")
+                        .accentColor(.cyan)
                 }
                 
                 if config.proxyEnabled {
@@ -34,7 +30,7 @@ struct NetworkTabView: View {
                             TextField("127.0.0.1", text: $config.proxyHost)
                                 .multilineTextAlignment(.trailing)
                                 .autocapitalization(.none)
-                                .autocorrectionDisabled()
+                                .disableAutocorrection(true)
                         }
                         
                         HStack {
@@ -53,7 +49,7 @@ struct NetworkTabView: View {
                             TextField("user", text: $config.proxyUser)
                                 .multilineTextAlignment(.trailing)
                                 .autocapitalization(.none)
-                                .autocorrectionDisabled()
+                                .disableAutocorrection(true)
                         }
                         
                         HStack {
@@ -64,54 +60,34 @@ struct NetworkTabView: View {
                         }
                     }
                     
-                    Section {
+                    Section(footer: Text("Cần proxy hỗ trợ UDP associate cho DNS, QUIC, gaming...")) {
                         Toggle("Hỗ trợ UDP (SOCKS5)", isOn: $config.proxyUDP)
-                            .tint(.cyan)
-                    } footer: {
-                        Text("Cần proxy hỗ trợ UDP associate cho DNS, QUIC, gaming...")
+                            .accentColor(.cyan)
                     }
                 }
                 
                 // Anti-detect
-                Section {
+                Section(header: Text("Anti-Detect"), footer: Text("Hook các API để ẩn dấu vết proxy/VPN/jailbreak.")) {
                     Toggle("Ẩn Proxy Settings", isOn: $config.hideProxy)
-                        .tint(.cyan)
+                        .accentColor(.cyan)
                     Toggle("Ẩn VPN Interface", isOn: $config.hideVPN)
-                        .tint(.cyan)
+                        .accentColor(.cyan)
                     Toggle("Ẩn Jailbreak", isOn: $config.hideJailbreak)
-                        .tint(.cyan)
-                } header: {
-                    Text("Anti-Detect")
-                } footer: {
-                    Text("Hook các API để ẩn dấu vết proxy/VPN/jailbreak.")
+                        .accentColor(.cyan)
                 }
 
                 // ID Spoofing
-                Section {
+                Section(header: Text("ID Spoofing")) {
                     Toggle("Spoof IDFA", isOn: $config.spoofIDFA)
-                        .tint(.cyan)
+                        .accentColor(.cyan)
                     Toggle("Spoof IDFV", isOn: $config.spoofIDFV)
-                        .tint(.cyan)
+                        .accentColor(.cyan)
                     Toggle("Spoof Battery", isOn: $config.spoofBattery)
-                        .tint(.cyan)
-                } header: {
-                    Text("ID Spoofing")
+                        .accentColor(.cyan)
                 }
                 
                 // Daemon Status
-                Section {
-                    Button {
-                        checkDaemonStatus()
-                    } label: {
-                        HStack {
-                            Image(systemName: "antenna.radiowaves.left.and.right")
-                            Text("Kiểm tra scproxyd")
-                        }
-                    }
-                    .foregroundColor(.cyan)
-                } header: {
-                    Text("Daemon")
-                } footer: {
+                Section(header: Text("Daemon"), footer: Group {
                     if let status = daemonStatus {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Running: \((status["running"] as? Bool) ?? false ? "✓" : "✗")")
@@ -125,6 +101,16 @@ struct NetworkTabView: View {
                             .font(.caption)
                             .foregroundColor(.red)
                     }
+                }) {
+                    Button {
+                        checkDaemonStatus()
+                    } label: {
+                        HStack {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                            Text("Kiểm tra scproxyd")
+                        }
+                    }
+                    .foregroundColor(.cyan)
                 }
             }
             .navigationTitle("Network")

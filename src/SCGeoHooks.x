@@ -17,6 +17,12 @@
 static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 static BOOL SC_GEO_ON()     { return CFG().enabled && CFG().geoEnabled; }
 
+static void SCGeoPrefsChanged(CFNotificationCenterRef center, void *observer,
+                              CFStringRef name, const void *object,
+                              CFDictionaryRef userInfo) {
+    [CFG() reload];
+}
+
 static CLLocation *sc_make_location() {
     SCSpoofConfig *c = CFG();
     CLLocationCoordinate2D coord = CLLocationCoordinate2DMake(c.latitude, c.longitude);
@@ -277,6 +283,9 @@ static CLLocation *sc_make_location() {
     @autoreleasepool {
         [SCSpoofConfig shared];
         if (![CFG() shouldInjectForCurrentBundle]) return;
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+            NULL, SCGeoPrefsChanged, CFSTR("com.iosspoof.tweak.prefs.changed"), NULL,
+            CFNotificationSuspensionBehaviorCoalesce);
         %init;
     }
 }

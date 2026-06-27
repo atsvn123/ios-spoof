@@ -5,15 +5,11 @@ struct GPSTabView: View {
     @State private var showMapPicker = false
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             List {
-                Section {
+                Section(header: Text("Vị trí GPS"), footer: Text("Hook CoreLocation để spoof vị trí GPS cho các app.")) {
                     Toggle("Bật Geo Spoofing", isOn: $config.geoEnabled)
-                        .tint(.cyan)
-                } header: {
-                    Text("Vị trí GPS")
-                } footer: {
-                    Text("Hook CoreLocation để spoof vị trí GPS cho các app.")
+                        .accentColor(.cyan)
                 }
                 
                 if config.geoEnabled {
@@ -21,7 +17,7 @@ struct GPSTabView: View {
                         HStack {
                             Text("Vĩ độ (Latitude)")
                             Spacer()
-                            TextField("21.0285", value: $config.latitude, format: .number)
+                            TextField("21.0285", text: doubleBinding($config.latitude))
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
                         }
@@ -29,7 +25,7 @@ struct GPSTabView: View {
                         HStack {
                             Text("Kinh độ (Longitude)")
                             Spacer()
-                            TextField("105.8542", value: $config.longitude, format: .number)
+                            TextField("105.8542", text: doubleBinding($config.longitude))
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
                         }
@@ -37,7 +33,7 @@ struct GPSTabView: View {
                         HStack {
                             Text("Độ cao (Altitude)")
                             Spacer()
-                            TextField("20.0", value: $config.altitude, format: .number)
+                            TextField("20.0", text: doubleBinding($config.altitude))
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
                         }
@@ -47,7 +43,7 @@ struct GPSTabView: View {
                         HStack {
                             Text("Horizontal Accuracy")
                             Spacer()
-                            TextField("5.0", value: $config.horizontalAccuracy, format: .number)
+                            TextField("5.0", text: doubleBinding($config.horizontalAccuracy))
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
                         }
@@ -55,7 +51,7 @@ struct GPSTabView: View {
                         HStack {
                             Text("Heading (°)")
                             Spacer()
-                            TextField("0.0", value: $config.heading, format: .number)
+                            TextField("0.0", text: doubleBinding($config.heading))
                                 .multilineTextAlignment(.trailing)
                                 .keyboardType(.decimalPad)
                         }
@@ -94,6 +90,17 @@ struct GPSTabView: View {
             }
         }
     }
+
+    private func doubleBinding(_ value: Binding<Double>) -> Binding<String> {
+        Binding<String>(
+            get: { String(format: "%.6f", value.wrappedValue) },
+            set: { newValue in
+                if let parsed = Double(newValue.replacingOccurrences(of: ",", with: ".")) {
+                    value.wrappedValue = parsed
+                }
+            }
+        )
+    }
 }
 
 struct QuickLocationRow: View {
@@ -125,10 +132,10 @@ struct QuickLocationRow: View {
 struct MapPickerView: View {
     @Binding var latitude: Double
     @Binding var longitude: Double
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.presentationMode) private var presentationMode
     
     var body: some View {
-        NavigationStack {
+        NavigationView {
             VStack {
                 Text("Map Picker")
                     .font(.title)
@@ -139,10 +146,10 @@ struct MapPickerView: View {
             .navigationTitle("Chọn vị trí")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Đóng") { dismiss() }
+                    Button("Đóng") { presentationMode.wrappedValue.dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Xong") { dismiss() }
+                    Button("Xong") { presentationMode.wrappedValue.dismiss() }
                 }
             }
         }

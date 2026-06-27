@@ -54,11 +54,6 @@ struct ContentView: View {
                 }
                 .tag(6)
         }
-        .tint(.cyan)
+        .accentColor(.cyan)
     }
-}
-
-#Preview {
-    ContentView()
-        .preferredColorScheme(.dark)
 }

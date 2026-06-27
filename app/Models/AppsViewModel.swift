@@ -61,6 +61,11 @@ final class AppsViewModel: ObservableObject {
         saveSelected()
     }
 
+    func select(_ apps: [AppInfo]) {
+        selectedApps.formUnion(apps.map { $0.bundleID })
+        saveSelected()
+    }
+
     func deselectAll() {
         selectedApps.removeAll()
         saveSelected()
@@ -105,7 +110,8 @@ final class AppsViewModel: ObservableObject {
 
         var result: [AppInfo] = []
         for app in nsApps {
-            guard let bundleID = app.value(forKey: "applicationIdentifier") as? String else { continue }
+            guard let bundleID = app.value(forKey: "applicationIdentifier") as? String,
+                  bundleID != "com.iosspoof.app" else { continue }
 
             let name: String
             if let cn = app.value(forKey: "localizedName") as? String {

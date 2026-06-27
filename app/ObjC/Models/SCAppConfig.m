@@ -1,5 +1,6 @@
 #import "SCAppConfig.h"
 #import "SCDevicePresetStore.h"
+#import "SCLocaleStore.h"
 #import <CoreFoundation/CoreFoundation.h>
 
 NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.changed";
@@ -76,6 +77,9 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.bluetoothDeviceName = d[@"bluetoothDeviceName"] ?: @"";
     self.bluetoothConnected = d[@"bluetoothConnected"] ? [d[@"bluetoothConnected"] boolValue] : YES;
     self.signalStrength = d[@"signalStrength"] ? [d[@"signalStrength"] integerValue] : 4;
+    self.localeIdentifier = d[@"localeIdentifier"] ?: @"";
+    self.timezoneIdentifier = d[@"timezoneIdentifier"] ?: @"";
+    self.timestampOffset = d[@"timestampOffset"] ? [d[@"timestampOffset"] doubleValue] : 0;
 }
 
 - (void)save {
@@ -127,6 +131,9 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"bluetoothDeviceName"] = self.bluetoothDeviceName ?: @"";
     d[@"bluetoothConnected"] = @(self.bluetoothConnected);
     d[@"signalStrength"] = @(self.signalStrength);
+    d[@"localeIdentifier"] = self.localeIdentifier ?: @"";
+    d[@"timezoneIdentifier"] = self.timezoneIdentifier ?: @"";
+    d[@"timestampOffset"] = @(self.timestampOffset);
     [d writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }
@@ -198,6 +205,12 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.bluetoothDeviceName = btNames[arc4random_uniform((uint32_t)btNames.count)];
     self.bluetoothConnected = YES;
     self.signalStrength = 3 + arc4random_uniform(2);
+    // Auto locale from geo
+    NSDictionary *localeInfo = [SCLocaleStore localeForGeo:self.latitude lon:self.longitude];
+    if (localeInfo) {
+        self.localeIdentifier = localeInfo[@"locale"];
+        self.timezoneIdentifier = localeInfo[@"tz"];
+    }
     [self clearIDCache];
     [self save];
 }
@@ -223,6 +236,12 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
             self.geoIPIsp = isp;
             if (callingCode.length > 0) {
                 self.carrierISO = [json[@"country_code"] lowercaseString] ?: self.carrierISO;
+            }
+            // Sync locale from geo
+            NSDictionary *localeInfo = [SCLocaleStore localeForGeo:lat lon:lon];
+            if (localeInfo) {
+                self.localeIdentifier = localeInfo[@"locale"];
+                self.timezoneIdentifier = localeInfo[@"tz"];
             }
             [self save];
         });

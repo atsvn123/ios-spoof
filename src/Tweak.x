@@ -7,6 +7,7 @@
 #import <sys/utsname.h>
 #import <sys/mount.h>
 #import <sys/statvfs.h>
+#import <sys/time.h>
 #import <net/if.h>
 #import <mach/mach.h>
 #import <mach/host_info.h>
@@ -15,6 +16,7 @@
 #import <unistd.h>
 #import <errno.h>
 #import <string.h>
+#import <time.h>
 #import <substrate.h>
 #import <IOKit/IOKitLib.h>
 
@@ -718,7 +720,133 @@ static int sc_uname(struct utsname *buf) {
 }
 
 // ============================================================================
-//  9. CONSOLIDATED CONSTRUCTOR
+//  10. Locale / Timezone / Timestamp spoof
+// ============================================================================
+
+%hook NSLocale
+- (NSString *)localeIdentifier {
+    if (SC_ON() && CFG().localeIdentifier.length) return CFG().localeIdentifier;
+    return %orig;
+}
+- (NSString *)countryCode {
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        NSArray *parts = [CFG().localeIdentifier componentsSeparatedByString:@"_"];
+        if (parts.count >= 2) return parts[1];
+    }
+    return %orig;
+}
+- (NSString *)languageCode {
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        NSArray *parts = [CFG().localeIdentifier componentsSeparatedByString:@"_"];
+        if (parts.count >= 1) return parts[0];
+    }
+    return %orig;
+}
++ (instancetype)currentLocale {
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        return [NSLocale localeWithLocaleIdentifier:CFG().localeIdentifier];
+    }
+    return %orig;
+}
++ (instancetype)systemLocale {
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        return [NSLocale localeWithLocaleIdentifier:CFG().localeIdentifier];
+    }
+    return %orig;
+}
++ (NSArray *)preferredLanguages {
+    NSArray *orig = %orig;
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        NSMutableArray *m = [NSMutableArray arrayWithObject:CFG().localeIdentifier];
+        [m addObjectsFromArray:orig];
+        return m.copy;
+    }
+    return orig;
+}
+%end
+
+%hook NSTimeZone
++ (instancetype)systemTimeZone {
+    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    return %orig;
+}
++ (instancetype)localTimeZone {
+    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    return %orig;
+}
++ (instancetype)defaultTimeZone {
+    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    return %orig;
+}
++ (instancetype)timeZoneForSecondsFromGMT:(NSInteger)seconds {
+    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    return %orig;
+}
+%end
+
+%hook NSDate
++ (instancetype)date {
+    NSDate *d = %orig;
+    if (SC_ON() && CFG().timestampOffset != 0) {
+        return [d dateByAddingTimeInterval:CFG().timestampOffset];
+    }
+    return d;
+}
++ (instancetype)distantPast { return %orig; }
++ (instancetype)distantFuture { return %orig; }
+- (instancetype)init {
+    self = %orig;
+    if (SC_ON() && CFG().timestampOffset != 0) {
+        return [self dateByAddingTimeInterval:CFG().timestampOffset];
+    }
+    return self;
+}
+%end
+
+%hook NSCalendar
++ (instancetype)currentCalendar {
+    NSCalendar *c = %orig;
+    if (SC_ON() && CFG().timezoneIdentifier.length) {
+        c.timeZone = [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    }
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        c.locale = [NSLocale localeWithLocaleIdentifier:CFG().localeIdentifier];
+    }
+    return c;
+}
++ (instancetype)autoupdatingCurrentCalendar {
+    NSCalendar *c = %orig;
+    if (SC_ON() && CFG().timezoneIdentifier.length) {
+        c.timeZone = [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    }
+    if (SC_ON() && CFG().localeIdentifier.length) {
+        c.locale = [NSLocale localeWithLocaleIdentifier:CFG().localeIdentifier];
+    }
+    return c;
+}
+%end
+
+// time() / gettimeofday() / clock_gettime — fake timestamp
+static time_t (*orig_time)(time_t *);
+static time_t sc_time(time_t *t) {
+    time_t r = orig_time(t);
+    if (SC_ON() && CFG().timestampOffset != 0) {
+        r += (time_t)CFG().timestampOffset;
+        if (t) *t = r;
+    }
+    return r;
+}
+
+static int (*orig_gettimeofday)(struct timeval *, struct timezone *);
+static int sc_gettimeofday(struct timeval *tv, struct timezone *tz) {
+    int r = orig_gettimeofday(tv, tz);
+    if (r == 0 && SC_ON() && CFG().timestampOffset != 0 && tv) {
+        tv->tv_sec += (time_t)CFG().timestampOffset;
+    }
+    return r;
+}
+
+
 //    Chỉ cài hook khi process hiện tại nằm trong targetBundles.
 //    Process không target: return ngay, không hook gì, zero overhead.
 // ============================================================================
@@ -803,6 +931,7 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
         MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
         MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
+        MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
+        MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
     }
-}
 }

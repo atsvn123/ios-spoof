@@ -12,6 +12,7 @@ iOSSpoof_FILES = \
 	ObjC/SCTabBarController.m \
 	ObjC/Models/SCAppConfig.m \
 	ObjC/Models/SCDevicePresetStore.m \
+	ObjC/Models/SCLocaleStore.m \
 	ObjC/Controllers/SCBaseTableViewController.m \
 	ObjC/Controllers/SCStatusViewController.m \
 	ObjC/Controllers/SCDeviceViewController.m \

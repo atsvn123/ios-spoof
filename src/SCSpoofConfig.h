@@ -81,6 +81,11 @@
 // Carrier signal strength (0-4 bars)
 @property (nonatomic, readonly) NSInteger signalStrength;
 
+// Locale / Timezone / Timestamp
+@property (nonatomic, readonly) NSString *localeIdentifier;  // e.g. "en_US"
+@property (nonatomic, readonly) NSString *timezoneIdentifier; // e.g. "Asia/Ho_Chi_Minh"
+@property (nonatomic, readonly) NSTimeInterval timestampOffset; // seconds to offset
+
 /** Danh sách bundle ID mục tiêu. Nếu rỗng = không inject vào app nào. */
 @property (nonatomic, readonly) NSArray *targetBundles;
 

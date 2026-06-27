@@ -71,6 +71,11 @@ extern NSString * const SCPreferencesChangedNotification;
 // Carrier signal strength (0-4)
 @property (nonatomic) NSInteger signalStrength;
 
+// Locale / Timezone / Timestamp
+@property (nonatomic, copy) NSString *localeIdentifier;
+@property (nonatomic, copy) NSString *timezoneIdentifier;
+@property (nonatomic) NSTimeInterval timestampOffset;
+
 + (instancetype)shared;
 - (void)load;
 - (void)save;

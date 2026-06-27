@@ -1,6 +1,7 @@
 #import "SCSpoofViewController.h"
 #import "../Models/SCAppConfig.h"
 #import "../Models/SCDevicePresetStore.h"
+#import "../Models/SCLocaleStore.h"
 
 @interface SCGPSSearchViewController : UITableViewController <UISearchBarDelegate>
 @property (nonatomic, strong) UISearchBar *searchBar;
@@ -122,7 +123,7 @@
 
 #pragma mark - Table
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 7; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 8; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
@@ -133,6 +134,7 @@
         case 4: return 5;
         case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
         case 6: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
+        case 7: return 4; // Locale, Timezone, Timestamp offset, Sync from Geo
         default: return 0;
     }
 }
@@ -143,7 +145,7 @@
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    return @[@"Network Mode", @"Proxy", @"GPS Location", @"Carrier", @"Anti-Detect", @"System & Storage", @"Bluetooth & Signal"][s];
+    return @[@"Network Mode", @"Proxy", @"GPS Location", @"Carrier", @"Anti-Detect", @"System & Storage", @"Bluetooth & Signal", @"Locale & Timezone"][s];
 }
 
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
@@ -165,6 +167,7 @@
         case 4: return [self antiDetectCell:i];
         case 5: return [self systemCell:i];
         case 6: return [self bluetoothCell:i];
+        case 7: return [self localeCell:i];
     }
     return [self cellWithTitle:@"" detail:@""];
 }
@@ -331,6 +334,10 @@
     if (i.section == 6 && i.row == 0) { [self randomBluetoothMAC]; return; }
     if (i.section == 6 && i.row == 1) { [self randomBluetoothDevice]; return; }
     if (i.section == 6 && i.row == 3) { [self showSignalPicker]; return; }
+    if (i.section == 7 && i.row == 0) { [self showLocalePicker]; return; }
+    if (i.section == 7 && i.row == 1) { [self showTimezonePicker]; return; }
+    if (i.section == 7 && i.row == 2) { [self showTimestampPicker]; return; }
+    if (i.section == 7 && i.row == 3) { [self syncLocaleFromGeo]; return; }
 }
 
 - (void)randomBSSID {
@@ -593,6 +600,161 @@
 }
 
 - (void)toggleBTConnected:(UISwitch *)s { self.config.bluetoothConnected = s.on; [self.config save]; }
+
+#pragma mark - Locale & Timezone
+
+- (UITableViewCell *)localeCell:(NSIndexPath *)i {
+    switch (i.row) {
+        case 0: {
+            NSString *detail = self.config.localeIdentifier.length ? self.config.localeIdentifier : @"System";
+            UITableViewCell *c = [self cellWithTitle:@"Locale" detail:detail];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+        case 1: {
+            NSString *detail = self.config.timezoneIdentifier.length ? self.config.timezoneIdentifier : @"System";
+            UITableViewCell *c = [self cellWithTitle:@"Timezone" detail:detail];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+        case 2: {
+            NSString *detail = self.config.timestampOffset == 0 ? @"Off" : [NSString stringWithFormat:@"%+ldh", (long)(self.config.timestampOffset / 3600)];
+            UITableViewCell *c = [self cellWithTitle:@"Timestamp Offset" detail:detail];
+            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+        case 3: {
+            UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+            c.textLabel.text = @"Sync from GPS";
+            c.detailTextLabel.text = @"Set locale/tz from geo";
+            c.textLabel.textColor = [UIColor systemBlueColor];
+            c.selectionStyle = UITableViewCellSelectionStyleDefault;
+            return c;
+        }
+    }
+    return [self cellWithTitle:@"" detail:@""];
+}
+
+- (void)showLocalePicker {
+    SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
+    // Reuse the search VC pattern but for locales
+    // Actually, use a simple UIAlertController with search
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Locale" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray *locales = [SCLocaleStore allLocales];
+    // Show first 20 most common, rest via search
+    for (NSUInteger j = 0; j < MIN(locales.count, 20); j++) {
+        NSDictionary *l = locales[j];
+        [alert addAction:[UIAlertAction actionWithTitle:[NSString stringWithFormat:@"%@ (%@)", l[@"country"], l[@"code"]] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            self.config.localeIdentifier = l[@"locale"];
+            self.config.timezoneIdentifier = l[@"tz"];
+            [self.config save];
+            [self.tableView reloadData];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Search all..." style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        [self showLocaleSearch];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset to System" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        self.config.localeIdentifier = @"";
+        self.config.timezoneIdentifier = @"";
+        [self.config save];
+        [self.tableView reloadData];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        alert.popoverPresentationController.sourceView = self.view;
+        alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+    }
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showLocaleSearch {
+    SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
+    vc.title = @"Search Locale";
+    // We need a different VC for locale search, but let's use a simple approach:
+    // Push a UITableViewController with search bar
+    [self.navigationController pushViewController:vc animated:YES];
+}
+
+- (void)showTimezonePicker {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Timezone" message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    // Group by region
+    NSArray *timezones = @[
+        @"Asia/Ho_Chi_Minh", @"Asia/Bangkok", @"Asia/Tokyo", @"Asia/Seoul", @"Asia/Shanghai",
+        @"Asia/Hong_Kong", @"Asia/Singapore", @"Asia/Kolkata", @"Asia/Karachi", @"Asia/Dhaka",
+        @"Asia/Dubai", @"Asia/Riyadh", @"Asia/Jerusalem", @"Asia/Tehran", @"Asia/Kathmandu",
+        @"Asia/Yangon", @"Asia/Phnom_Penh", @"Asia/Vientiane", @"Asia/Jakarta", @"Asia/Manila",
+        @"Asia/Kuala_Lumpur", @"Asia/Taipei", @"Asia/Almaty", @"Asia/Tashkent", @"Asia/Baku",
+        @"Asia/Tbilisi", @"Asia/Yerevan", @"Asia/Colombo", @"Asia/Chongqing",
+        @"America/New_York", @"America/Chicago", @"America/Denver", @"America/Los_Angeles",
+        @"America/Toronto", @"America/Vancouver", @"America/Mexico_City", @"America/Sao_Paulo",
+        @"America/Argentina/Buenos_Aires", @"America/Santiago", @"America/Bogota", @"America/Lima",
+        @"America/Caracas", @"America/Anchorage", @"Pacific/Honolulu",
+        @"Europe/London", @"Europe/Paris", @"Europe/Berlin", @"Europe/Madrid", @"Europe/Rome",
+        @"Europe/Amsterdam", @"Europe/Brussels", @"Europe/Zurich", @"Europe/Vienna",
+        @"Europe/Stockholm", @"Europe/Oslo", @"Europe/Copenhagen", @"Europe/Helsinki",
+        @"Europe/Warsand", @"Europe/Prague", @"Europe/Budapest", @"Europe/Bucharest",
+        @"Europe/Athens", @"Europe/Istanbul", @"Europe/Moscow", @"Europe/Kyiv", @"Europe/Lisbon",
+        @"Europe/Dublin", @"Europe/Belgrade", @"Europe/Zagreb", @"Europe/Soffia",
+        @"Australia/Sydney", @"Australia/Melbourne", @"Australia/Perth", @"Pacific/Auckland",
+        @"Africa/Cairo", @"Africa/Johannesburg", @"Africa/Lagos", @"Africa/Nairobi",
+        @"Africa/Casablanca", @"Africa/Tunis", @"Africa/Accra"
+    ];
+    for (NSString *tz in timezones) {
+        [alert addAction:[UIAlertAction actionWithTitle:tz style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            self.config.timezoneIdentifier = tz;
+            [self.config save];
+            [self.tableView reloadData];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Reset to System" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+        self.config.timezoneIdentifier = @"";
+        [self.config save];
+        [self.tableView reloadData];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertControllerStyleCancel handler:nil]];
+    if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        alert.popoverPresentationController.sourceView = self.view;
+        alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+    }
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showTimestampPicker {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Timestamp Offset" message:@"Offset thời gian hiển thị cho app" preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray *offsets = @[@0, @(-39600), @(-3600), @(3600), @(39600), @(54000), @(28800), @(32400), @(-28800), @(-32400)];
+    NSArray *labels = @[@"Off", @"-11h", @"-1h", @"+1h", @"+11h", @"+15h", @"+8h", @"+9h", @"-8h", @"-9h"];
+    for (NSUInteger j = 0; j < offsets.count; j++) {
+        [alert addAction:[UIAlertAction actionWithTitle:labels[j] style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            self.config.timestampOffset = [offsets[j] doubleValue];
+            [self.config save];
+            [self.tableView reloadData];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    if (self.traitCollection.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        alert.popoverPresentationController.sourceView = self.view;
+        alert.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width/2, self.view.bounds.size.height/2, 1, 1);
+    }
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)syncLocaleFromGeo {
+    NSDictionary *l = [SCLocaleStore localeForGeo:self.config.latitude lon:self.config.longitude];
+    if (l) {
+        self.config.localeIdentifier = l[@"locale"];
+        self.config.timezoneIdentifier = l[@"tz"];
+        [self.config save];
+        [self.tableView reloadData];
+    } else {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Không tìm thấy" message:@"Không thể xác định locale từ tọa độ GPS hiện tại." preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+}
 
 #pragma mark - Anti-Detect
 

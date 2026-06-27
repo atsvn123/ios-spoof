@@ -29,7 +29,7 @@
     return total > 0 ? total / 3 : 0;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 8; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 9; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
@@ -40,13 +40,14 @@
         case 4: return 3;  // Network mode
         case 5: return 9;  // System spoof
         case 6: return 4;  // Bluetooth & Signal
-        case 7: return 2;  // Actions
+        case 7: return 3;  // Locale & Timezone
+        case 8: return 2;  // Actions
         default: return 0;
     }
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    return @[@"Trạng thái", @"Thiết bị đang spoof", @"Carrier", @"GPS", @"Network Mode", @"System & IDs", @"Bluetooth & Signal", @"Actions"][s];
+    return @[@"Trạng thái", @"Thiết bị đang spoof", @"Carrier", @"GPS", @"Network Mode", @"System & IDs", @"Bluetooth & Signal", @"Locale & Timezone", @"Actions"][s];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)i {
@@ -106,6 +107,13 @@
             }
         }
         case 7: {
+            switch (i.row) {
+                case 0: return [self cellWithTitle:@"Locale" detail:self.config.localeIdentifier.length ? self.config.localeIdentifier : @"System"];
+                case 1: return [self cellWithTitle:@"Timezone" detail:self.config.timezoneIdentifier.length ? self.config.timezoneIdentifier : @"System"];
+                case 2: return [self cellWithTitle:@"Timestamp" detail:self.config.timestampOffset == 0 ? @"Off" : [NSString stringWithFormat:@"%+ldh", (long)(self.config.timestampOffset / 3600)]];
+            }
+        }
+        case 8: {
             UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
             if (i.row == 0) {
                 cell.textLabel.text = @"Randomize All";
@@ -125,7 +133,7 @@
 
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)i {
     [t deselectRowAtIndexPath:i animated:YES];
-    if (i.section == 7 && i.row == 0) { [self.config randomizeAll]; [t reloadData]; }
+    if (i.section == 8 && i.row == 0) { [self.config randomizeAll]; [t reloadData]; }
 }
 
 - (void)toggleEnabled:(UISwitch *)sw { self.config.enabled = sw.on; [self.config save]; }

@@ -203,7 +203,7 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
 //  4b. Storage / Disk space spoofing
 // ============================================================================
 
-static NSNumber *(*orig_statfs)(const char *, struct statfs *);
+static int (*orig_statfs)(const char *, struct statfs *);
 static int sc_statfs(const char *path, struct statfs *buf) {
     int r = orig_statfs(path, buf);
     if (r == 0 && SC_ON() && CFG().totalStorage > 0) {
@@ -252,15 +252,8 @@ static int sc_statfs(const char *path, struct statfs *buf) {
 %end
 
 // ============================================================================
-//  4d. UIDevice power state
+//  4d. UIDevice power state (already hooked in section 1)
 // ============================================================================
-
-%hook UIDevice
-- (BOOL)isBatteryMonitoringEnabled {
-    if (SC_ON() && CFG().spoofBattery) return YES;
-    return %orig;
-}
-%end
 
 // ============================================================================
 //  4e. User-Agent spoofing (NSMutableURLRequest / NSURLSession)
@@ -269,14 +262,14 @@ static int sc_statfs(const char *path, struct statfs *buf) {
 %hook NSMutableURLRequest
 - (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
     if (SC_ON() && [field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
-        return; // Don't let app override our UA
+        return;
     }
     %orig;
 }
 %end
 
 %hook NSURLSessionConfiguration
-- (NSString *)HTTPAdditionalHeaders {
+- (NSDictionary *)HTTPAdditionalHeaders {
     NSDictionary *d = %orig;
     if (SC_ON() && CFG().systemVersion) {
         NSString *ua = [NSString stringWithFormat:@"Mozilla/5.0 (iPhone; CPU iPhone OS %@ like Mac OS X)", CFG().systemVersion];

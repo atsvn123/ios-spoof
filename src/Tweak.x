@@ -20,6 +20,7 @@
 #import <mach-o/dyld.h>
 #import <sandbox.h>
 #import <sys/sysctl.h>
+#import <spawn.h>
 #import <mach/mach_traps.h>
 #import <mach/task_info.h>
 #import <mach/mach_init.h>
@@ -807,6 +808,7 @@ static int sc_sandbox_init(const char *profile, uint64_t flags, char **errorbuf)
 }
 
 // csops - banking apps check CS_OPS_STATUS for code signing flags
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 static int (*orig_csops)(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 static int sc_csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize) {
     int r = orig_csops(pid, ops, useraddr, usersize);
@@ -824,6 +826,7 @@ static int sc_csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize
 // ============================================================================
 
 // proc_listpids — banking apps enumerate running processes to find jailbreakd, sshd, etc.
+extern int proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, uint32_t buffersize);
 static int (*orig_proc_listpids)(uint32_t type, uint32_t typeinfo, void *buffer, uint32_t buffersize);
 static int sc_proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, uint32_t buffersize) {
     int r = orig_proc_listpids(type, typeinfo, buffer, buffersize);
@@ -839,6 +842,7 @@ static int sc_proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, uint
 // Already hooked in sc_sysctl, but that only handles CTL_HW
 // We need a separate hook for KERN_PROC to filter process names
 static int (*orig_proc_pidpath)(pid_t pid, void *buffer, uint32_t buffersize);
+extern int proc_pidpath(pid_t pid, void *buffer, uint32_t buffersize);
 static int sc_proc_pidpath(pid_t pid, void *buffer, uint32_t buffersize) {
     int r = orig_proc_pidpath(pid, buffer, buffersize);
     if (r > 0 && SC_ON() && CFG().hideJailbreak && buffer) {
@@ -859,6 +863,7 @@ static int sc_proc_pidpath(pid_t pid, void *buffer, uint32_t buffersize) {
 }
 
 static int (*orig_proc_name)(pid_t pid, void *buffer, uint32_t buffersize);
+extern int proc_name(pid_t pid, void *buffer, uint32_t buffersize);
 static int sc_proc_name(pid_t pid, void *buffer, uint32_t buffersize) {
     int r = orig_proc_name(pid, buffer, buffersize);
     if (r > 0 && SC_ON() && CFG().hideJailbreak && buffer) {
@@ -928,8 +933,7 @@ static char *sc_realpath(const char *path, char *resolved) {
 }
 
 // posix_spawn — strip DYLD_INSERT_LIBRARIES from child process env
-// Roothide already does this at systemhook level, but we do it here too for safety
-// (in case child process of target app spawns another process)
+extern int posix_spawn(pid_t *, const char *, void *, void *, char *const[], char *const[]);
 static int (*orig_posix_spawn)(pid_t *, const char *, void *, void *, char *const[], char *const[]);
 static int sc_posix_spawn(pid_t *pid, const char *path, void *file_actions, void *attrp, char *const argv[], char *const envp[]) {
     if (SC_ON() && CFG().hideJailbreak && envp) {

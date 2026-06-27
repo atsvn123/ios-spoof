@@ -107,8 +107,6 @@ final class AppsViewModel: ObservableObject {
             let name: String
             if let cn = app.value(forKey: "localizedName") as? String {
                 name = cn
-            } else if let pn = app.value(forKey: "applicationType") as? String {
-                name = bundleID
             } else {
                 name = bundleID
             }

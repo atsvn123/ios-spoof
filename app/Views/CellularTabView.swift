@@ -19,7 +19,7 @@ struct CellularTabView: View {
                     Text("Hook CTTelephonyNetworkInfo để spoof carrier info.")
                 }
                 
-                Section("MCC/MNC") {
+                Section(header: Text("MCC/MNC")) {
                     HStack {
                         Text("MCC (Mobile Country)")
                         Spacer()
@@ -45,7 +45,7 @@ struct CellularTabView: View {
                     }
                 }
                 
-                Section("Loại mạng") {
+                Section {
                     Picker("Radio Access Technology", selection: $config.radioTech) {
                         Text("5G NR (NSA)").tag("CTRadioAccessTechnologyNRNSA")
                         Text("5G NR (SA)").tag("CTRadioAccessTechnologyNR")
@@ -55,12 +55,14 @@ struct CellularTabView: View {
                         Text("2G EDGE").tag("CTRadioAccessTechnologyEdge")
                         Text("2G GPRS").tag("CTRadioAccessTechnologyGPRS")
                     }
+                } header: {
+                    Text("Loại mạng")
                 } footer: {
                     Text("Spoof loại mạng di động. App sẽ thấy 4G/5G thay vì WiFi.")
                 }
                 
                 // Quick carriers
-                Section("Nhà mạng nhanh") {
+                Section(header: Text("Nhà mạng nhanh")) {
                     QuickCarrierRow(name: "Viettel", mcc: "452", mnc: "04", iso: "vn")
                     QuickCarrierRow(name: "Mobifone", mcc: "452", mnc: "01", iso: "vn")
                     QuickCarrierRow(name: "Vinaphone", mcc: "452", mnc: "02", iso: "vn")
@@ -123,7 +125,7 @@ struct WiFiTo4GView: View {
                     .foregroundColor(.secondary)
             }
             
-            Section("Cách hoạt động") {
+            Section(header: Text("Cách hoạt động")) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("1. Hook reachability để trả về WWAN")
                     Text("2. Hook getifaddrs để ẩn WiFi interface")

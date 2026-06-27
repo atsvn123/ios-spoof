@@ -18,7 +18,7 @@ struct DeviceTabView: View {
                 }
                 
                 // Device Model
-                Section("Thiết bị") {
+                Section(header: Text("Thiết bị")) {
                     Button {
                         showModelPicker = true
                     } label: {
@@ -39,7 +39,7 @@ struct DeviceTabView: View {
                 }
                 
                 // Device Info Preview
-                Section("Thông tin thiết bị") {
+                Section(header: Text("Thông tin thiết bị")) {
                     LabeledContent("Product Type", value: config.productType)
                     LabeledContent("Marketing Name", value: config.marketingName)
                     LabeledContent("Hardware Model", value: config.hardwareModel)
@@ -47,7 +47,7 @@ struct DeviceTabView: View {
                 }
                 
                 // Screen
-                Section("Màn hình") {
+                Section(header: Text("Màn hình")) {
                     LabeledContent("Kích thước", value: "\(config.screenWidth) x \(config.screenHeight)")
                     LabeledContent("Scale", value: "\(config.screenScale)x")
                     LabeledContent("Inches", value: String(format: "%.1f\"", config.screenInches))

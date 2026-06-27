@@ -18,7 +18,7 @@ struct NetworkTabView: View {
                 }
                 
                 if config.proxyEnabled {
-                    Section("Loại Proxy") {
+                    Section(header: Text("Loại Proxy")) {
                         Picker("", selection: $config.proxyType) {
                             Text("SOCKS5").tag("socks5")
                             Text("HTTP CONNECT").tag("http")
@@ -26,7 +26,7 @@ struct NetworkTabView: View {
                         .pickerStyle(.segmented)
                     }
                     
-                    Section("Server") {
+                    Section(header: Text("Server")) {
                         HStack {
                             Text("Host")
                             Spacer()
@@ -45,7 +45,7 @@ struct NetworkTabView: View {
                         }
                     }
                     
-                    Section("Xác thực (tùy chọn)") {
+                    Section(header: Text("Xác thực (tùy chọn)")) {
                         HStack {
                             Text("Username")
                             Spacer()
@@ -72,25 +72,29 @@ struct NetworkTabView: View {
                 }
                 
                 // Anti-detect
-                Section("Anti-Detect") {
+                Section {
                     Toggle("Ẩn Proxy Settings", isOn: $config.hideProxy)
                         .tint(.cyan)
                     Toggle("Ẩn VPN Interface", isOn: $config.hideVPN)
                         .tint(.cyan)
                     Toggle("Ẩn Jailbreak", isOn: $config.hideJailbreak)
                         .tint(.cyan)
+                } header: {
+                    Text("Anti-Detect")
                 } footer: {
                     Text("Hook các API để ẩn dấu vết proxy/VPN/jailbreak.")
                 }
-                
+
                 // ID Spoofing
-                Section("ID Spoofing") {
+                Section {
                     Toggle("Spoof IDFA", isOn: $config.spoofIDFA)
                         .tint(.cyan)
                     Toggle("Spoof IDFV", isOn: $config.spoofIDFV)
                         .tint(.cyan)
                     Toggle("Spoof Battery", isOn: $config.spoofBattery)
                         .tint(.cyan)
+                } header: {
+                    Text("ID Spoofing")
                 }
                 
                 // Daemon Status

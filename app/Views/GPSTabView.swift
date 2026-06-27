@@ -17,7 +17,7 @@ struct GPSTabView: View {
                 }
                 
                 if config.geoEnabled {
-                    Section("Tọa độ") {
+                    Section(header: Text("Tọa độ")) {
                         HStack {
                             Text("Vĩ độ (Latitude)")
                             Spacer()
@@ -43,7 +43,7 @@ struct GPSTabView: View {
                         }
                     }
                     
-                    Section("Độ chính xác") {
+                    Section(header: Text("Độ chính xác")) {
                         HStack {
                             Text("Horizontal Accuracy")
                             Spacer()
@@ -75,7 +75,7 @@ struct GPSTabView: View {
                     }
                     
                     // Quick locations
-                    Section("Vị trí nhanh") {
+                    Section(header: Text("Vị trí nhanh")) {
                         QuickLocationRow(name: "Hà Nội", lat: 21.0285, lon: 105.8542)
                         QuickLocationRow(name: "TP. Hồ Chí Minh", lat: 10.8231, lon: 106.6297)
                         QuickLocationRow(name: "Đà Nẵng", lat: 16.0471, lon: 108.2068)

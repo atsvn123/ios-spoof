@@ -59,33 +59,7 @@ final class SpoofConfig: ObservableObject {
     private init() {
         load()
         // Auto-save with debounce (0.5s after last change)
-        $enabled
-            .merge(with: $productType)
-            .merge(with: $randomizeOnLaunch)
-            .merge(with: $carrierName)
-            .merge(with: $carrierMCC)
-            .merge(with: $carrierMNC)
-            .merge(with: $carrierISO)
-            .merge(with: $radioTech)
-            .merge(with: $geoEnabled)
-            .merge(with: $latitude)
-            .merge(with: $longitude)
-            .merge(with: $altitude)
-            .merge(with: $horizontalAccuracy)
-            .merge(with: $heading)
-            .merge(with: $proxyEnabled)
-            .merge(with: $proxyType)
-            .merge(with: $proxyHost)
-            .merge(with: $proxyPort)
-            .merge(with: $proxyUser)
-            .merge(with: $proxyPass)
-            .merge(with: $proxyUDP)
-            .merge(with: $hideProxy)
-            .merge(with: $hideVPN)
-            .merge(with: $hideJailbreak)
-            .merge(with: $spoofIDFA)
-            .merge(with: $spoofIDFV)
-            .merge(with: $spoofBattery)
+        objectWillChange
             .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.save()
@@ -217,7 +191,124 @@ final class SpoofConfig: ObservableObject {
         save()
     }
 
+    // MARK: - IDs Path
+    private var idsPath: String {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: "/var/jb/var/mobile/Library/Preferences") {
+            return "/var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist"
+        }
+        return "/var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist"
+    }
+
+    // MARK: - Cached IDs (per-bundle, stored by tweak)
+    func cachedIDs(for bundleID: String) -> [String: String]? {
+        guard let dict = NSDictionary(contentsOfFile: idsPath) as? [String: Any],
+              let per = dict[bundleID] as? [String: Any] else { return nil }
+        var result: [String: String] = [:]
+        if let v = per["udid"] as? String { result["udid"] = v }
+        if let v = per["serial"] as? String { result["serial"] = v }
+        if let v = per["ecid"] as? String { result["ecid"] = v }
+        if let v = per["imei"] as? String { result["imei"] = v }
+        if let v = per["mac"] as? String { result["mac"] = v }
+        if let v = per["idfa"] as? String { result["idfa"] = v }
+        return result.isEmpty ? nil : result
+    }
+
+    func allCachedIDs() -> [String: [String: String]] {
+        guard let dict = NSDictionary(contentsOfFile: idsPath) as? [String: Any] else { return [:] }
+        var result: [String: [String: String]] = [:]
+        for (bundleID, val) in dict {
+            guard let per = val as? [String: Any] else { continue }
+            var ids: [String: String] = [:]
+            for key in ["udid", "serial", "ecid", "imei", "mac", "idfa"] {
+                if let v = per[key] as? String { ids[key] = v }
+            }
+            if !ids.isEmpty { result[bundleID] = ids }
+        }
+        return result
+    }
+
+    func clearIDCache() {
+        try? FileManager.default.removeItem(atPath: idsPath)
+    }
+
+    // MARK: - Randomize All
+    func randomizeAll() {
+        // Random device
+        let preset = DevicePresets.random()
+        productType = preset.productType
+
+        // Enable randomize on launch (new IDs each time)
+        randomizeOnLaunch = true
+
+        // Clear cached IDs so tweak generates fresh ones
+        clearIDCache()
+
+        // Random carrier from preset
+        carrierName = preset.carrierName
+        carrierMCC = preset.carrierMCC
+        carrierMNC = preset.carrierMNC
+        carrierISO = preset.carrierISO
+        radioTech = preset.radioTech
+
+        // Random GPS — pick from preset's default or random city
+        let cities: [(String, Double, Double)] = [
+            ("Hà Nội", 21.0285, 105.8542),
+            ("TP.HCM", 10.8231, 106.6297),
+            ("Đà Nẵng", 16.0471, 108.2068),
+            ("Hải Phòng", 20.8449, 106.6881),
+            ("Cần Thơ", 10.0452, 105.7469),
+            ("New York", 40.7128, -74.0060),
+            ("London", 51.5074, -0.1278),
+            ("Tokyo", 35.6762, 139.6503),
+            ("Singapore", 1.3521, 103.8198),
+            ("Paris", 48.8566, 2.3522),
+            ("Sydney", -33.8688, 151.2093),
+            ("Berlin", 52.5200, 13.4050),
+        ]
+        let city = cities.randomElement()!
+        latitude = city.1
+        longitude = city.2
+        altitude = Double.random(in: 5...50)
+        horizontalAccuracy = Double.random(in: 3...15)
+        heading = Double.random(in: 0...359)
+
+        // Enable everything
+        enabled = true
+        geoEnabled = true
+        spoofIDFA = true
+        spoofIDFV = true
+        spoofBattery = true
+        hideProxy = true
+        hideVPN = true
+        hideJailbreak = true
+
+        save()
+    }
+
+    // MARK: - Respring
+    func respring() {
+        let killallPath = access("/var/jb/usr/bin/killall", 0) == 0 ? "/var/jb/usr/bin/killall" : "/usr/bin/killall"
+        let pidptr = UnsafeMutablePointer<pid_t>.allocate(capacity: 1)
+        defer { pidptr.deallocate() }
+        var args: [UnsafeMutablePointer<CChar>?] = [
+            strdup(killallPath),
+            strdup("-9"),
+            strdup("SpringBoard"),
+            nil
+        ]
+        defer { for i in 0..<3 { free(args[i]) } }
+        posix_spawn(pidptr, killallPath, nil, nil, args, environ)
+    }
+
     // MARK: - Computed
+    var resolvedPreset: DevicePreset? {
+        if productType.isEmpty || productType == "random" {
+            return DevicePresets.random()
+        }
+        return DevicePresets.preset(for: productType)
+    }
+
     var selectedModelName: String {
         if productType.isEmpty || productType == "random" {
             return "Ngẫu nhiên"

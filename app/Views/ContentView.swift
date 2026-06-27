@@ -5,47 +5,54 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
+            StatusTabView()
+                .tabItem {
+                    Image(systemName: "shield.lefthalf.filled")
+                    Text("Status")
+                }
+                .tag(0)
+
             DeviceTabView()
                 .tabItem {
                     Image(systemName: "iphone")
                     Text("Device")
                 }
-                .tag(0)
+                .tag(1)
 
             AppsTabView()
                 .tabItem {
                     Image(systemName: "app.badge")
                     Text("Apps")
                 }
-                .tag(1)
+                .tag(2)
 
             NetworkTabView()
                 .tabItem {
                     Image(systemName: "network")
                     Text("Network")
                 }
-                .tag(2)
+                .tag(3)
 
             GPSTabView()
                 .tabItem {
                     Image(systemName: "location.fill")
                     Text("GPS")
                 }
-                .tag(3)
+                .tag(4)
 
             CellularTabView()
                 .tabItem {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                     Text("Cellular")
                 }
-                .tag(4)
+                .tag(5)
 
             HardwareTabView()
                 .tabItem {
                     Image(systemName: "cpu")
                     Text("Hardware")
                 }
-                .tag(5)
+                .tag(6)
         }
         .tint(.cyan)
     }

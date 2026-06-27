@@ -156,7 +156,7 @@ struct BatteryStateView: View {
                 }
             }
             
-            Section("Battery State") {
+            Section(header: Text("Battery State")) {
                 Picker("", selection: $state) {
                     Text("Unplugged").tag("uncharging")
                     Text("Charging").tag("charging")

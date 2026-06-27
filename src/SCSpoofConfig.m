@@ -4,7 +4,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 
 #define SC_READ_BOOL(k)        [d objectForKey:k] ? [[d objectForKey:k] boolValue] : NO
 #define SC_READ_BOOL_DEF(k, v) [d objectForKey:k] ? [[d objectForKey:k] boolValue] : (v)
-#define SC_READ_STR(k)         [d objectForKey:k] ? [[d objectForKey:k] stringValue] : nil
+#define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
 @interface SCSpoofConfig ()
@@ -95,7 +95,6 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (void)resolvePreset {
     SCDevicePreset *p;
     NSString *pt = _productType;
-    // per-bundle override productType
     NSDictionary *ov = _bundleOverrides[_bundleID];
     if ([ov objectForKey:@"productType"]) {
         pt = [ov objectForKey:@"productType"];
@@ -109,18 +108,20 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
         p = [SCDevicePresets randomPreset];
     }
     p = [p copy];
-    // apply global carrier override
-    if (_carrierName) p.carrierName = _carrierName;
-    if (_carrierMCC)  p.carrierMCC  = _carrierMCC;
-    if (_carrierMNC)  p.carrierMNC  = _carrierMNC;
-    if (_carrierISO)  p.carrierISO  = _carrierISO;
-    if (_radioTech)   p.radioTech   = _radioTech;
-    // apply per-bundle override
+    // apply global carrier override (nil-safe)
+    if (_carrierName.length) p.carrierName = _carrierName;
+    if (_carrierMCC.length)  p.carrierMCC  = _carrierMCC;
+    if (_carrierMNC.length)  p.carrierMNC  = _carrierMNC;
+    if (_carrierISO.length)  p.carrierISO  = _carrierISO;
+    if (_radioTech.length)   p.radioTech   = _radioTech;
+    // apply per-bundle override (nil-safe)
     if (ov) {
         for (NSString *k in ov) {
             if ([k hasPrefix:@"carrier"] || [k isEqualToString:@"radioTech"]) {
+                id v = ov[k];
+                if (![v isKindOfClass:[NSString class]] || ![(NSString *)v length]) continue;
                 if ([p respondsToSelector:NSSelectorFromString(k)]) {
-                    [p setValue:ov[k] forKey:k];
+                    @try { [p setValue:v forKey:k]; } @catch(__unused id e) {}
                 }
             }
         }
@@ -159,10 +160,10 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     if (!_imei)   _imei   = [SCDevicePresets generateIMEI];
     if (!_mac)    _mac    = [SCDevicePresets generateMAC];
     if (!_idfa)   _idfa   = [SCDevicePresets generateIDFA];
-    // persist
+    // persist (sandbox-safe: có thể fail silently nếu app không có quyền ghi)
     ids[key] = @{ @"udid":_udid, @"serial":_serial, @"ecid":_ecid,
                   @"imei":_imei, @"mac":_mac, @"idfa":_idfa };
-    [ids writeToFile:idsPath atomically:YES];
+    @try { [ids writeToFile:idsPath atomically:YES]; } @catch(__unused id e) {}
 }
 
 - (NSString *)currentBundleID { return _bundleID; }

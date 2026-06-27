@@ -93,14 +93,10 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
     }
     return %orig;
 }
-- (NSString *)identifierForVendor {
+- (NSUUID *)identifierForVendor {
     if (SC_ON() && CFG().spoofIDFV) {
         return [[NSUUID alloc] initWithUUIDString:CFG().spoofedIDFA] ?: [NSUUID UUID];
     }
-    return %orig;
-}
-- (NSString *)model {
-    if (SC_ON() && P()) return @"iPhone";
     return %orig;
 }
 - (NSString *)systemName {
@@ -108,12 +104,6 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
 }
 - (NSString *)systemVersion {
     if (SC_ON() && CFG().systemVersion) return CFG().systemVersion;
-    return %orig;
-}
-- (NSUUID *)identifierForVendor {
-    if (SC_ON() && CFG().spoofIDFV) {
-        return [[NSUUID alloc] initWithUUIDString:CFG().spoofedIDFA] ?: [NSUUID UUID];
-    }
     return %orig;
 }
 + (UIDevice *)currentDevice {

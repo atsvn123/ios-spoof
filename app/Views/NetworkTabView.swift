@@ -4,6 +4,7 @@ struct NetworkTabView: View {
     @StateObject private var config = SpoofConfig.shared
     @State private var showDaemonStatus = false
     @State private var daemonStatus: [String: Any]?
+    @State private var hasCheckedDaemon = false
     
     var body: some View {
         NavigationStack {
@@ -108,6 +109,8 @@ struct NetworkTabView: View {
                         }
                     }
                     .foregroundColor(.cyan)
+                } header: {
+                    Text("Daemon")
                 } footer: {
                     if let status = daemonStatus {
                         VStack(alignment: .leading, spacing: 4) {
@@ -117,14 +120,24 @@ struct NetworkTabView: View {
                         }
                         .font(.caption)
                         .foregroundColor(.secondary)
+                    } else if hasCheckedDaemon {
+                        Text("Daemon không phản hồi. Đảm bảo scproxyd đang chạy.")
+                            .font(.caption)
+                            .foregroundColor(.red)
                     }
                 }
             }
             .navigationTitle("Network")
         }
     }
-    
+
     private func checkDaemonStatus() {
-        daemonStatus = DaemonClient.shared.sendCommand(["cmd": "status"])
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = DaemonClient.shared.sendCommand(["cmd": "status"])
+            DispatchQueue.main.async {
+                daemonStatus = result
+                hasCheckedDaemon = true
+            }
+        }
     }
 }

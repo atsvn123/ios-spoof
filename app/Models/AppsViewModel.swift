@@ -17,15 +17,18 @@ final class AppsViewModel: ObservableObject {
     @Published var isLoading = false
 
     private init() {
-        loadApps()
         loadSelected()
+        loadApps()
     }
 
     func loadApps() {
+        guard !isLoading else { return }
+        isLoading = true
         DispatchQueue.global(qos: .userInitiated).async {
             let apps = self.fetchInstalledApps()
             DispatchQueue.main.async {
                 self.apps = apps
+                self.isLoading = false
             }
         }
     }

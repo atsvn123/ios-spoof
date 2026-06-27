@@ -26,10 +26,12 @@ iOSSpoofApp_FILES = \
 iOSSpoofApp_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 iOSSpoofApp_FRAMEWORKS = UIKit SwiftUI Foundation CoreLocation CoreTelephony SystemConfiguration MapKit
 iOSSpoofApp_PRIVATE_FRAMEWORKS = IOKit
-iOSSpoofApp_LDFLAGS = -Wl,-undefined,dynamic_lookup
+iOSSpoofApp_LDFLAGS = -Wl,-undefined,dynamic_lookup -Wl,-w
 
 iOSSpoofApp_INSTALL_PATH = /Applications
 iOSSpoofApp_CODESIGN_FLAGS = -S
 iOSSpoofApp_INFO_PLIST = iOSSpoofApp-Info.plist
+iOSSpoofApp_BUNDLE_NAME = iOSSpoof
+iOSSpoofApp_RESOURCE_DIRS = Assets.xcassets
 
 include $(THEOS_MAKE_PATH)/application.mk

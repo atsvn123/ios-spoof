@@ -304,7 +304,7 @@ final class SpoofConfig: ObservableObject {
     // MARK: - Computed
     var resolvedPreset: DevicePreset? {
         if productType.isEmpty || productType == "random" {
-            return DevicePresets.random()
+            return DevicePresets.all.first
         }
         return DevicePresets.preset(for: productType)
     }

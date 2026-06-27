@@ -157,6 +157,23 @@ iOSSpoof uses **kernel-level PF divert** instead:
 
 Result: App sees no proxy, no VPN interface, no DNS leak.
 
+## Safe Mode / Bootloop Notes
+
+The package is **safe-by-default**:
+
+- The tweak filter only injects into `com.apple.springboard` and `com.apple.Preferences` by default.
+- `scproxyd` LaunchDaemon has `RunAtLoad=false` and `KeepAlive=false` by default.
+- Add target app bundle IDs manually to `iOSSpoof.plist` only after confirming the device boots safely.
+
+Do **not** use `Executables = *` on a daily device. Injecting into all system processes can bootloop the device, especially on rootless/roothide jailbreaks.
+
+If a bootloop happens:
+
+1. Hard reboot.
+2. Boot jailbreak with tweaks disabled.
+3. Remove the package: `dpkg -r com.iosspoof.tweak`.
+4. If needed, delete `/var/jb/Library/MobileSubstrate/DynamicLibraries/iOSSpoof.*` and `/var/jb/Library/LaunchDaemons/com.iosspoof.scproxyd.plist`.
+
 ## Roothide / Dopamine Notes
 
 - Tweak injects into **all processes** via MobileSubstrate/ElleKit filter

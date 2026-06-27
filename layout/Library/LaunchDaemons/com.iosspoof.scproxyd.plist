@@ -9,9 +9,9 @@
         <string>/var/jb/usr/bin/scproxyd</string>
     </array>
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
     <key>UserName</key>
     <string>root</string>
     <key>SessionCreate</key>

@@ -825,18 +825,8 @@ static int sc_csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize
 //      Roothide KHÔNG cover những thứ này — iOSSpoof bổ sung
 // ============================================================================
 
-// proc_listpids — banking apps enumerate running processes to find jailbreakd, sshd, etc.
-extern int proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, uint32_t buffersize);
-static int (*orig_proc_listpids)(uint32_t type, uint32_t typeinfo, void *buffer, uint32_t buffersize);
-static int sc_proc_listpids(uint32_t type, uint32_t typeinfo, void *buffer, uint32_t buffersize) {
-    int r = orig_proc_listpids(type, typeinfo, buffer, buffersize);
-    if (r > 0 && SC_ON() && CFG().hideJailbreak && buffer) {
-        // buffer contains array of pid_t (int32_t)
-        // We can't remove entries (would break array), but we can't easily filter either
-        // Instead, we hook sysctl(KERN_PROC) below which is the more common API
-    }
-    return r;
-}
+// proc_listpids — DISABLED: causes crash, proc_pidpath/proc_name are sufficient
+// static int (*orig_proc_listpids)(uint32_t, uint32_t, void *, uint32_t);
 
 // sysctl(KERN_PROC) — banking apps enumerate processes via sysctl
 // Already hooked in sc_sysctl, but that only handles CTL_HW
@@ -881,18 +871,11 @@ static int sc_proc_name(pid_t pid, void *buffer, uint32_t buffersize) {
     return r;
 }
 
-// task_info — banking apps use TASK_DYLD_INFO to enumerate loaded dylibs
-// This is harder to fake, but we can at least hide the dyld image count
-static kern_return_t (*orig_task_info)(task_name_t target, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t *task_info_count);
-static kern_return_t sc_task_info(task_name_t target, task_flavor_t flavor, task_info_t task_info_out, mach_msg_type_number_t *task_info_count) {
-    kern_return_t r = orig_task_info(target, flavor, task_info_out, task_info_count);
-    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && flavor == TASK_DYLD_INFO && task_info_out) {
-        // TASK_DYLD_INFO returns dyld_all_image_infos_addr
-        // We can't easily fake this, but we've already hooked _dyld_image_count/_dyld_get_image_name
-        // to hide injected dylibs from enumeration
-    }
-    return r;
-}
+// task_info — DISABLED: causes crash in some apps
+// static kern_return_t (*orig_task_info)(task_name_t, task_flavor_t, task_info_t, mach_msg_type_number_t *);
+
+// proc_listpids — DISABLED: causes crash, proc_pidpath/proc_name are sufficient
+// static int (*orig_proc_listpids)(uint32_t, uint32_t, void *, uint32_t);
 
 // /proc/self/environ — banking apps read this file to get DYLD_INSERT_LIBRARIES
 // Hook open/read for /proc paths
@@ -936,29 +919,31 @@ static char *sc_realpath(const char *path, char *resolved) {
 static int (*orig_posix_spawn)(pid_t *, const char *, const posix_spawn_file_actions_t *, const posix_spawnattr_t *, char *const[], char *const[]);
 static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *file_actions, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]) {
     if (SC_ON() && CFG().hideJailbreak && envp) {
-        // Filter out DYLD_INSERT_LIBRARIES from envp
-        NSMutableArray *newEnv = [NSMutableArray array];
-        for (char *const *e = envp; *e; e++) {
-            NSString *env = [NSString stringWithUTF8String:*e];
-            if (![env hasPrefix:@"DYLD_INSERT_LIBRARIES="] &&
-                ![env hasPrefix:@"_MSSafeMode="] &&
-                ![env hasPrefix:@"ELLEKIT_HOME="] &&
-                ![env hasPrefix:@"SUBSTRATE_HOME="] &&
-                ![env hasPrefix:@"TWEAKS_ROOT="] &&
-                ![env hasPrefix:@"CFFIXED_USER_HOME="]) {
-                [newEnv addObject:env];
+        @try {
+            NSMutableArray *newEnv = [NSMutableArray array];
+            for (char *const *e = envp; *e; e++) {
+                NSString *env = [NSString stringWithUTF8String:*e];
+                if (![env hasPrefix:@"DYLD_INSERT_LIBRARIES="] &&
+                    ![env hasPrefix:@"_MSSafeMode="] &&
+                    ![env hasPrefix:@"ELLEKIT_HOME="] &&
+                    ![env hasPrefix:@"SUBSTRATE_HOME="] &&
+                    ![env hasPrefix:@"TWEAKS_ROOT="] &&
+                    ![env hasPrefix:@"CFFIXED_USER_HOME="]) {
+                    [newEnv addObject:env];
+                }
             }
-        }
-        // Convert back to char**
-        NSUInteger count = newEnv.count;
-        char **newEnvp = (char **)malloc((count + 1) * sizeof(char *));
-        for (NSUInteger i = 0; i < count; i++) {
-            newEnvp[i] = (char *)[newEnv[i] UTF8String];
-        }
-        newEnvp[count] = NULL;
-        int r = orig_posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
-        free(newEnvp);
-        return r;
+            NSUInteger count = newEnv.count;
+            if (count > 0) {
+                char **newEnvp = (char **)calloc(count + 1, sizeof(char *));
+                for (NSUInteger i = 0; i < count; i++) {
+                    newEnvp[i] = (char *)[newEnv[i] UTF8String];
+                }
+                newEnvp[count] = NULL;
+                int r = orig_posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
+                free(newEnvp);
+                return r;
+            }
+        } @catch (__unused id e) {}
     }
     return orig_posix_spawn(pid, path, file_actions, attrp, argv, envp);
 }
@@ -967,48 +952,17 @@ static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_a
 //  6c. Mach-level anti-detection (roothide does NOT cover these)
 // ============================================================================
 
-// mach_port_names — banking apps enumerate mach ports to find jailbreakd
-static kern_return_t (*orig_mach_port_names)(task_t task, mach_port_name_array_t *names, mach_msg_type_number_t *namesCnt, mach_port_type_array_t *types, mach_msg_type_number_t *typesCnt);
-static kern_return_t sc_mach_port_names(task_t task, mach_port_name_array_t *names, mach_msg_type_number_t *namesCnt, mach_port_type_array_t *types, mach_msg_type_number_t *typesCnt) {
-    kern_return_t r = orig_mach_port_names(task, names, namesCnt, types, typesCnt);
-    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && names && *names && *namesCnt > 0) {
-        // We can't easily filter individual ports (would break port array)
-        // But we can reduce the count slightly to hide injected ports
-        // This is a best-effort approach — mach port names are opaque integers
-    }
-    return r;
-}
+// task_threads — DISABLED: causes crash in some apps
+// static kern_return_t (*orig_task_threads)(task_t, thread_act_array_t *, mach_msg_type_number_t *);
 
-// task_threads — banking apps check for injected threads (ellekit/substrate create threads)
-static kern_return_t (*orig_task_threads)(task_t target_task, thread_act_array_t *thread_list, mach_msg_type_number_t *thread_count);
-static kern_return_t sc_task_threads(task_t target_task, thread_act_array_t *thread_list, mach_msg_type_number_t *thread_count) {
-    kern_return_t r = orig_task_threads(target_task, thread_list, thread_count);
-    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && thread_count && *thread_count > 1) {
-        // Substrate/ellekit may create 1-2 extra threads for hooking
-        // Reduce count by 1 to hide the hook thread
-        if (*thread_count > 2) {
-            (*thread_count)--;
-        }
-    }
-    return r;
-}
+// thread_info — DISABLED: causes crash in some apps
+// static kern_return_t (*orig_thread_info)(thread_act_t, thread_flavor_t, thread_info_t, mach_msg_type_number_t *);
 
-// thread_info — banking apps check thread names for substrate/ellekit threads
-static kern_return_t (*orig_thread_info)(thread_act_t thread_act, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t *thread_info_count);
-static kern_return_t sc_thread_info(thread_act_t thread_act, thread_flavor_t flavor, thread_info_t thread_info_out, mach_msg_type_number_t *thread_info_count) {
-    kern_return_t r = orig_thread_info(thread_act, flavor, thread_info_out, thread_info_count);
-    if (r == KERN_SUCCESS && SC_ON() && CFG().hideJailbreak && flavor == THREAD_EXTENDED_INFO && thread_info_out) {
-        thread_extended_info_t info = (thread_extended_info_t)thread_info_out;
-        // Check thread name for jailbreak-related strings
-        if (strstr(info->pth_name, "substrate") || strstr(info->pth_name, "ellekit") ||
-            strstr(info->pth_name, "Substrate") || strstr(info->pth_name, "ElleKit") ||
-            strstr(info->pth_name, "iOSSpoof") || strstr(info->pth_name, "tweak") ||
-            strstr(info->pth_name, "hook")) {
-            strlcpy(info->pth_name, "com.apple.main-thread", sizeof(info->pth_name));
-        }
-    }
-    return r;
-}
+// mach_port_names — DISABLED: causes crash in some apps
+// static kern_return_t (*orig_mach_port_names)(task_t, mach_port_name_array_t *, mach_msg_type_number_t *, mach_port_type_array_t *, mach_msg_type_number_t *);
+
+// task_info — DISABLED: causes crash in some apps
+// static kern_return_t (*orig_task_info)(task_name_t, task_flavor_t, task_info_t, mach_msg_type_number_t *);
 
 // ============================================================================
 //  7. NSBundle
@@ -1226,7 +1180,7 @@ static NSSet *sc_protected_bundles(void) {
         Class idfaClass = objc_getClass("ASIdentifierManager");
         if (idfaClass) %init(IDFA);
 
-        // C function hooks
+        // C function hooks — core (always needed)
         MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
         MSHookFunction((void *)&sysctl, (void *)sc_sysctl, (void **)&orig_sysctl);
 
@@ -1244,25 +1198,32 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
         MSHookFunction((void *)&fopen, (void *)sc_fopen, (void **)&orig_fopen);
         MSHookFunction((void *)&dlopen,(void *)sc_dlopen,(void **)&orig_dlopen);
-        MSHookFunction((void *)&fork, (void *)sc_fork, (void **)&orig_fork);
-        MSHookFunction((void *)&task_for_pid, (void *)sc_task_for_pid, (void **)&orig_task_for_pid);
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
         MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
         MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
         MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
         MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
-        MSHookFunction((void *)&_dyld_image_count, (void *)sc_dyld_image_count, (void **)&orig_dyld_image_count);
-        MSHookFunction((void *)&_dyld_get_image_name, (void *)sc_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
-        MSHookFunction((void *)&csops, (void *)sc_csops, (void **)&orig_csops);
-        MSHookFunction((void *)&proc_listpids, (void *)sc_proc_listpids, (void **)&orig_proc_listpids);
-        MSHookFunction((void *)&proc_pidpath, (void *)sc_proc_pidpath, (void **)&orig_proc_pidpath);
-        MSHookFunction((void *)&proc_name, (void *)sc_proc_name, (void **)&orig_proc_name);
-        MSHookFunction((void *)&task_info, (void *)sc_task_info, (void **)&orig_task_info);
         MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
         MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
-        MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
-        MSHookFunction((void *)&mach_port_names, (void *)sc_mach_port_names, (void **)&orig_mach_port_names);
-        MSHookFunction((void *)&task_threads, (void *)sc_task_threads, (void **)&orig_task_threads);
-        MSHookFunction((void *)&thread_info, (void *)sc_thread_info, (void **)&orig_thread_info);
+
+        // Anti-detection hooks — only when hideJailbreak is enabled
+        if (CFG().hideJailbreak) {
+            MSHookFunction((void *)&fork, (void *)sc_fork, (void **)&orig_fork);
+            MSHookFunction((void *)&task_for_pid, (void *)sc_task_for_pid, (void **)&orig_task_for_pid);
+            MSHookFunction((void *)&_dyld_image_count, (void *)sc_dyld_image_count, (void **)&orig_dyld_image_count);
+            MSHookFunction((void *)&_dyld_get_image_name, (void *)sc_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
+            MSHookFunction((void *)&csops, (void *)sc_csops, (void **)&orig_csops);
+            MSHookFunction((void *)&proc_pidpath, (void *)sc_proc_pidpath, (void **)&orig_proc_pidpath);
+            MSHookFunction((void *)&proc_name, (void *)sc_proc_name, (void **)&orig_proc_name);
+        }
+
+        // High-risk hooks — only when hideJailbreak is enabled AND not a system process
+        // These hooks can cause crashes in some system frameworks
+        // Only enable for target apps that need banking-level anti-detection
+        if (CFG().hideJailbreak) {
+            @try {
+                MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
+            } @catch (__unused id e) {}
+        }
     }
 }

@@ -1,6 +1,5 @@
 #import "SCSpoofConfig.h"
 #import "SCDevicePresets.h"
-#import "SCProxyManager.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <sys/sysctl.h>
@@ -18,23 +17,16 @@
 
 // ============================================================================
 //  iOSSpoof - Tweak.x
-//  Device hooks: UIDevice, sysctl, IOKit, NSBundle, UIScreen, battery, jailbreak.
+//  Device hooks: UIDevice, sysctl, IOKit, UIScreen, battery, jailbreak.
 //  Per-process config từ SCSpoofConfig.
+//
+//  QUAN TRỌNG: Tất cả hook chỉ được cài đặt khi shouldInjectForCurrentBundle
+//  trả YES. Process không nằm trong targetBundles sẽ không bị hook gì cả.
 // ============================================================================
 
 static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 static SCDevicePreset *P()  { return CFG().resolvedPreset; }
 static BOOL SC_ON()         { return CFG().enabled; }
-
-static void SCApplyProxyIfNeeded(void) {
-    NSString *bundle = CFG().currentBundleID ?: @"";
-    if (![bundle isEqualToString:@"com.apple.springboard"]) return;
-    if (CFG().enabled && CFG().proxyEnabled) {
-        [[SCProxyManager shared] startProxy];
-    } else {
-        [[SCProxyManager shared] stopProxy];
-    }
-}
 
 // ----------------------------------------------------------------------------
 //  Lắng nghe thay đổi preferences
@@ -43,21 +35,6 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
                          CFStringRef name, const void *object,
                          CFDictionaryRef userInfo) {
     [CFG() reload];
-    SCApplyProxyIfNeeded();
-}
-
-static void SCBootstrap(void) {
-    @autoreleasepool {
-        // trigger load config
-        [SCSpoofConfig shared];
-        SCApplyProxyIfNeeded();
-        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
-            NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs-changed"), NULL,
-            CFNotificationSuspensionBehaviorCoalesce);
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"iOSSpoofDebugLog"]) {
-            NSLog(@"[iOSSpoof] loaded into %@ (preset=%@)", CFG().currentBundleID, P().productType);
-        }
-    }
 }
 
 // ============================================================================
@@ -80,10 +57,10 @@ static void SCBootstrap(void) {
     return %orig;
 }
 - (NSString *)systemName {
-    return %orig; // giữ iOS
+    return %orig;
 }
 - (NSString *)systemVersion {
-    return %orig; // không spoof iOS version để tránh bất nhất với API khác
+    return %orig;
 }
 - (NSUUID *)identifierForVendor {
     if (SC_ON() && CFG().spoofIDFV) {
@@ -94,14 +71,12 @@ static void SCBootstrap(void) {
 + (UIDevice *)currentDevice {
     return %orig;
 }
-
 - (float)batteryLevel {
     if (SC_ON() && CFG().spoofBattery && P()) {
         return [P().batteryLevel floatValue];
     }
     return %orig;
 }
-
 - (UIDeviceBatteryState)batteryState {
     if (SC_ON() && CFG().spoofBattery && P()) {
         NSString *s = P().batteryState;
@@ -111,7 +86,6 @@ static void SCBootstrap(void) {
     }
     return %orig;
 }
-
 - (BOOL)isBatteryMonitoringEnabled {
     if (SC_ON() && CFG().spoofBattery) return YES;
     return %orig;
@@ -149,18 +123,15 @@ static void SCBootstrap(void) {
 %end
 
 // ============================================================================
-//  3. sysctlbyname / sysctl - hw.machine, hw.model, hw.serialnumber, hw.UUID
-//     Đây là vector chính mà app dùng để fingerprint.
+//  3. sysctlbyname / sysctl
 // ============================================================================
 
-// MSHookFunction cho C function
 static int (*orig_sysctlbyname)(const char *, void *, size_t *, void *, size_t);
 static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
                            void *newp, size_t newlen) {
     if (!name) return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
     if (SC_ON() && P()) {
         NSString *n = [NSString stringWithUTF8String:name];
-        // hw.machine -> ProductType (iPhone15,2)
         if ([n isEqualToString:@"hw.machine"]) {
             const char *val = [P().productType UTF8String];
             size_t need = strlen(val) + 1;
@@ -172,7 +143,6 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
             }
             return 0;
         }
-        // hw.model -> HardwareModel (D63AP)
         if ([n isEqualToString:@"hw.model"]) {
             const char *val = [P().hardwareModel UTF8String];
             size_t need = strlen(val) + 1;
@@ -184,7 +154,6 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
             }
             return 0;
         }
-        // hw.serialnumber
         if ([n isEqualToString:@"hw.serialnumber"] || [n isEqualToString:@"hw.serialno"]) {
             const char *val = [CFG().spoofedSerial UTF8String];
             size_t need = strlen(val) + 1;
@@ -196,7 +165,6 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
             }
             return 0;
         }
-        // hw.UUID / hw.uuid (platform UUID)
         if ([n isEqualToString:@"hw.UUID"] || [n isEqualToString:@"hw.uuid"]) {
             const char *val = [CFG().spoofedUDID UTF8String];
             size_t need = strlen(val) + 1;
@@ -208,7 +176,6 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
             }
             return 0;
         }
-        // hw.product / hw.productname
         if ([n isEqualToString:@"hw.product"] || [n isEqualToString:@"hw.productname"]) {
             const char *val = [P().productType UTF8String];
             size_t need = strlen(val) + 1;
@@ -220,7 +187,6 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
             }
             return 0;
         }
-        // hw.target / hw.boardid
         if ([n isEqualToString:@"hw.target"]) {
             const char *val = [P().internalName UTF8String];
             size_t need = strlen(val) + 1;
@@ -236,15 +202,9 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
     return orig_sysctlbyname(name, oldp, oldlenp, newp, newlen);
 }
 
-%ctor {
-    MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
-}
-
 // ============================================================================
-//  5. IOKit - IOPlatformExpertDevice (UDID, serial, ECID, board-id)
-//     App dùng IOKit matching để lấy UniqueDeviceID / serial-number / ECID.
+//  4. IOKit
 // ============================================================================
-// Hook IORegistryEntryCreateCFProperty để filter key trên IOPlatformExpertDevice
 
 extern CFTypeRef IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
     CFStringRef key, CFAllocatorRef allocator, IOOptionBits options);
@@ -261,7 +221,6 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
     CFStringRef key, CFAllocatorRef allocator, IOOptionBits options) {
     if (SC_ON() && P()) {
         NSString *k = (__bridge NSString *)key;
-        // Trả về các property đã spoof
         if ([k isEqualToString:@"IOPlatformUUID"]) {
             return (__bridge_retained CFTypeRef)CFG().spoofedUDID;
         }
@@ -282,24 +241,12 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
         if ([k isEqualToString:@"model"]) {
             return SCCFDataFromString(P().hardwareModel ?: @"");
         }
-        if ([k isEqualToString:@"device-tree"]) {
-            // không can thiệp sâu vào device-tree
-        }
     }
     return orig_IORegistryEntryCreateCFProperty(entry, key, allocator, options);
 }
 
-%ctor {
-    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-    if (iokit) {
-        MSHookFunction((void *)&IORegistryEntryCreateCFProperty,
-                       (void *)sc_IORegistryEntryCreateCFProperty,
-                       (void **)&orig_IORegistryEntryCreateCFProperty);
-    }
-}
-
 // ============================================================================
-//  6. AdSupport - IDFA
+//  5. AdSupport - IDFA
 // ============================================================================
 %group IDFA
 @interface ASIdentifierManager : NSObject
@@ -322,16 +269,10 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
 %end
 %end
 
-%ctor {
-    Class c = objc_getClass("ASIdentifierManager");
-    if (c) %init(IDFA);
-}
-
 // ============================================================================
-//  7. Jailbreak detection - ẩn file hệ thống, environment
+//  6. Jailbreak detection - ẩn file hệ thống, environment
 // ============================================================================
 
-// Hook access/stat/lstat/open để ẩn file jailbreak
 static NSArray *sc_jb_paths;
 static NSArray *sc_jb_path_prefixes;
 
@@ -424,7 +365,7 @@ static int sc_open(const char *path, int flags, ...) {
 }
 %end
 
-// Hook getenv cho DYLD_INSERT_LIBRARIES, _MSSafeMode
+// Hook getenv
 static char *(*orig_getenv)(const char *);
 static char *sc_getenv(const char *name) {
     if (!name) return orig_getenv(name);
@@ -440,47 +381,21 @@ static char *sc_getenv(const char *name) {
     return orig_getenv(name);
 }
 
-// Hook fork/ptrace để chống anti-debug / detection
-static pid_t (*orig_fork)(void);
-static pid_t sc_fork(void) {
-    if (SC_ON() && CFG().hideJailbreak) {
-        errno = ENOTSUP;
-        return -1;
-    }
-    return orig_fork();
-}
-
-%ctor {
-    MSHookFunction((void *)&access, (void *)sc_access, (void **)&orig_access);
-    MSHookFunction((void *)&stat,  (void *)sc_stat,  (void **)&orig_stat);
-    MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
-    MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
-    MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
-    MSHookFunction((void *)&fork,  (void *)sc_fork,  (void **)&orig_fork);
-}
-
 // ============================================================================
-//  8. UIScreen native (re-hook vì đã có group trên)
-//    Đã cover ở section 2.
+//  7. NSBundle
 // ============================================================================
 
-// ============================================================================
-//  9. CFBundleGetValueForInfoDictionaryKey - marketing name, device info
-// ============================================================================
-
-// Hook [NSBundle infoDictionary] để sửa một số key nếu cần
 %hook NSBundle
 - (NSDictionary *)infoDictionary {
     NSDictionary *d = %orig;
-    // Không can thiệp quá sâu vào infoDictionary để tránh crash app.
     return d;
 }
 %end
 
 // ============================================================================
-//  10. sysctl CTL_HW / CTL_KERN chung (uname)
+//  8. uname
 // ============================================================================
-// uname() trả về machine, nodeName, release...
+
 static int (*orig_uname)(struct utsname *);
 static int sc_uname(struct utsname *buf) {
     int r = orig_uname(buf);
@@ -491,11 +406,52 @@ static int sc_uname(struct utsname *buf) {
     return r;
 }
 
-%ctor {
-    MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
-}
+// ============================================================================
+//  9. CONSOLIDATED CONSTRUCTOR
+//    Chỉ cài hook khi process hiện tại nằm trong targetBundles.
+//    Process không target: return ngay, không hook gì, zero overhead.
+// ============================================================================
 
 %ctor {
-    %init(_ungrouped);
-    SCBootstrap();
+    @autoreleasepool {
+        [SCSpoofConfig shared];
+
+        // Kiểm tra: process này có nằm trong danh sách target không?
+        if (![CFG() shouldInjectForCurrentBundle]) {
+            return;
+        }
+
+        // Đăng ký lắng nghe thay đổi preferences
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+            NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs-changed"), NULL,
+            CFNotificationSuspensionBehaviorCoalesce);
+
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"iOSSpoofDebugLog"]) {
+            NSLog(@"[iOSSpoof] injecting into %@ (preset=%@)", CFG().currentBundleID, P().productType);
+        }
+
+        // ObjC hooks
+        %init(_ungrouped);
+
+        // IDFA hooks (chỉ nếu class tồn tại)
+        Class idfaClass = objc_getClass("ASIdentifierManager");
+        if (idfaClass) %init(IDFA);
+
+        // C function hooks
+        MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
+
+        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+        if (iokit) {
+            MSHookFunction((void *)&IORegistryEntryCreateCFProperty,
+                           (void *)sc_IORegistryEntryCreateCFProperty,
+                           (void **)&orig_IORegistryEntryCreateCFProperty);
+        }
+
+        MSHookFunction((void *)&access, (void *)sc_access, (void **)&orig_access);
+        MSHookFunction((void *)&stat,  (void *)sc_stat,  (void **)&orig_stat);
+        MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
+        MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
+        MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
+        MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
+    }
 }

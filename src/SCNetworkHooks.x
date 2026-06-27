@@ -259,6 +259,9 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
 
 %ctor {
     @autoreleasepool {
+        // Chỉ hook nếu process này là target
+        if (![CFG() shouldInjectForCurrentBundle]) return;
+
         void *cfnet = dlopen("/System/Library/Frameworks/CFNetwork.framework/CFNetwork", RTLD_NOW);
         if (cfnet) {
             MSHookFunction((void *)&CFNetworkCopySystemProxySettings,

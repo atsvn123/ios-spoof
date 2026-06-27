@@ -54,6 +54,18 @@ extern char **environ;
         CFSTR("com.iosspoof.tweak.prefs-changed"), NULL, NULL, TRUE);
 }
 
+// ---- Target Apps ----
+- (void)setTargetBundles:(id)v forSpecifier:(PSSpecifier *)s {
+    [self savePrefs:@{ @"targetBundles": v ?: @"" }];
+}
+- (id)readTargetBundles:(PSSpecifier *)s {
+    id val = [self loadPrefs][@"targetBundles"];
+    if ([val isKindOfClass:[NSArray class]]) {
+        return [val componentsJoinedByString:@","];
+    }
+    return val ?: @"";
+}
+
 // ---- Actions ----
 
 - (void)setEnabled:(id)value forSpecifier:(PSSpecifier *)spec {

@@ -59,6 +59,12 @@
 @property (nonatomic, readonly) BOOL spoofIDFV;
 @property (nonatomic, readonly) BOOL spoofBattery;
 
+/** Danh sách bundle ID mục tiêu. Nếu rỗng = không inject vào app nào. */
+@property (nonatomic, readonly) NSArray *targetBundles;
+
+/** Kiểm tra process hiện tại có nên inject hook hay không. */
+- (BOOL)shouldInjectForCurrentBundle;
+
 /** Preset đã resolve (kèm per-bundle override nếu có). */
 @property (nonatomic, readonly) SCDevicePreset *resolvedPreset;
 

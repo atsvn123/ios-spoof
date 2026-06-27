@@ -77,6 +77,15 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _spoofIDFV = SC_READ_BOOL_DEF(@"spoofIDFV", YES);
     _spoofBattery = SC_READ_BOOL_DEF(@"spoofBattery", YES);
 
+    id tb = d[@"targetBundles"];
+    if ([tb isKindOfClass:[NSArray class]]) {
+        _targetBundles = tb;
+    } else if ([tb isKindOfClass:[NSString class]]) {
+        _targetBundles = [tb componentsSeparatedByString:@","];
+    } else {
+        _targetBundles = @[];
+    }
+
     [self resolvePreset];
     [self ensureSpoofedIds];
 
@@ -157,6 +166,15 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 }
 
 - (NSString *)currentBundleID { return _bundleID; }
+- (BOOL)shouldInjectForCurrentBundle {
+    if (_targetBundles.count == 0) return NO;
+    for (NSString *target in _targetBundles) {
+        if ([target isKindOfClass:[NSString class]] && [_bundleID isEqualToString:target]) {
+            return YES;
+        }
+    }
+    return NO;
+}
 - (SCDevicePreset *)resolvedPreset { return _resolved; }
 - (NSString *)spoofedUDID { return _udid; }
 - (NSString *)spoofedSerial { return _serial; }

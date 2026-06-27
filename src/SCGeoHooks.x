@@ -268,3 +268,15 @@ static CLLocation *sc_make_location() {
     return %orig;
 }
 %end
+
+// ============================================================================
+//  6. Constructor - chỉ hook nếu process là target
+// ============================================================================
+
+%ctor {
+    @autoreleasepool {
+        [SCSpoofConfig shared];
+        if (![CFG() shouldInjectForCurrentBundle]) return;
+        %init;
+    }
+}

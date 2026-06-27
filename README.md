@@ -110,6 +110,18 @@ Push to `main` or tag `v1.0.0`. The workflow in `.github/workflows/build.yml`:
 3. Uploads as artifact
 4. Creates GitHub Release on tag
 
+For safe builds, the default filter uses `Classes = UIApplication` (only GUI apps, not system daemons). The tweak **does nothing** unless you add target app bundle IDs in **Settings → iOSSpoof → Target Apps**.
+
+To target an app:
+
+1. Install the package.
+2. Open **Settings → iOSSpoof**.
+3. Enter the app's bundle ID in **Target Apps** (comma-separated for multiple).
+4. Enable spoofing and configure.
+5. Tap **Áp dụng & Respring**.
+
+Do **not** use `Executables = *` on a daily device.
+
 ### Install
 ```bash
 # Copy .deb to device
@@ -119,25 +131,23 @@ scp packages/*.deb root@<device>:/var/root/
 ssh root@<device>
 dpkg -i /var/root/com.iosspoof.tweak_1.0.0_iphoneos-arm.deb
 killall -9 SpringBoard
-
-# Enable scproxyd (launchd)
-launchctl bootstrap system /var/jb/Library/LaunchDaemons/com.iosspoof.scproxyd.plist
 ```
 
 ## Usage
 
 1. Open **Settings → iOSSpoof**
-2. Enable **Bật Spoofing**
-3. Select device preset (iPhone 8 → 15 Pro Max, or Random)
-4. Configure carrier (default: Viettel, VN, 5G NR)
-5. Configure GPS coordinates (default: Hanoi 21.0285, 105.8542)
-6. Configure proxy:
+2. Enter target app bundle IDs in **Target Apps** (e.g. `com.example.app`)
+3. Enable **Bật Spoofing**
+4. Select device preset (iPhone 8 → 15 Pro Max, or Random)
+5. Configure carrier (default: Viettel, VN, 5G NR)
+6. Configure GPS coordinates (default: Hanoi 21.0285, 105.8542)
+7. Configure proxy:
    - Enable **Transparent Proxy**
    - Type: SOCKS5 or HTTP CONNECT
    - Host/Port/User/Pass of your upstream
    - Enable UDP if your SOCKS5 supports UDP associate
-7. Anti-detect: enable Hide Proxy, Hide VPN, Hide Jailbreak
-8. Tap **Áp dụng & Respring**
+8. Anti-detect: enable Hide Proxy, Hide VPN, Hide Jailbreak
+9. Tap **Áp dụng & Respring**
 
 ## How Anti-Detect Proxy Works
 
@@ -161,9 +171,10 @@ Result: App sees no proxy, no VPN interface, no DNS leak.
 
 The package is **safe-by-default**:
 
-- The tweak filter only injects into `com.apple.springboard` and `com.apple.Preferences` by default.
-- `scproxyd` LaunchDaemon has `RunAtLoad=false` and `KeepAlive=false` by default.
-- Add target app bundle IDs manually to `iOSSpoof.plist` only after confirming the device boots safely.
+- The tweak filter uses `Classes = UIApplication` — only GUI apps are injected, never system daemons.
+- The tweak **does nothing** unless target bundle IDs are configured in Settings.
+- `scproxyd` LaunchDaemon is not packaged for automatic boot loading by default.
+- Select target app bundle IDs in **Settings → iOSSpoof → Target Apps**.
 
 Do **not** use `Executables = *` on a daily device. Injecting into all system processes can bootloop the device, especially on rootless/roothide jailbreaks.
 
@@ -176,10 +187,10 @@ If a bootloop happens:
 
 ## Roothide / Dopamine Notes
 
-- Tweak injects into **all processes** via MobileSubstrate/ElleKit filter
+- Tweak injects only into GUI apps that match `Classes = UIApplication`; hooks are only installed for apps listed in **Target Apps** in Settings.
 - Apps installed from App Store work normally — no need to install via roothide manager
 - Roothide hides jailbreak artifacts; iOSSpoof adds additional hiding at API level
-- `scproxyd` runs as root via launchd (rootless path: `/var/jb/usr/bin/scproxyd`)
+- `scproxyd` is installed as a tool at `/var/jb/usr/bin/scproxyd`, but is not auto-loaded at boot by default.
 
 ## Config Schema
 

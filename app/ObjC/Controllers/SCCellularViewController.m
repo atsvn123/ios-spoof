@@ -1,0 +1,9 @@
+#import "SCCellularViewController.h"
+@implementation SCCellularViewController
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)t{return 2;}
+- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s{return s==0?5:4;}
+- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s{return s==0?@"Carrier":@"Quick";}
+- (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i{ if(i.section==0){NSArray*ttl=@[@"Name",@"MCC",@"MNC",@"ISO",@"Radio"];NSArray*val=@[self.config.carrierName,self.config.carrierMCC,self.config.carrierMNC,self.config.carrierISO,self.config.radioTech];UITableViewCell*c=[self cellWithTitle:ttl[i.row] detail:nil];c.accessoryView=[self textFieldWithText:val[i.row] placeholder:@"" tag:300+i.row keyboard:i.row==1||i.row==2?UIKeyboardTypeNumberPad:UIKeyboardTypeDefault];return c;} return[self cellWithTitle:@[@"Viettel LTE",@"Mobifone LTE",@"Vinaphone LTE",@"Viettel 5G"][i.row] detail:@""];}
+- (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)i{ if(i.section!=1)return; NSArray*p=@[@[@"Viettel",@"452",@"04",@"vn",@"CTRadioAccessTechnologyLTE"],@[@"Mobifone",@"452",@"01",@"vn",@"CTRadioAccessTechnologyLTE"],@[@"Vinaphone",@"452",@"02",@"vn",@"CTRadioAccessTechnologyLTE"],@[@"Viettel",@"452",@"04",@"vn",@"CTRadioAccessTechnologyNRNSA"]][i.row]; self.config.carrierName=p[0];self.config.carrierMCC=p[1];self.config.carrierMNC=p[2];self.config.carrierISO=p[3];self.config.radioTech=p[4];[self.config save];[t reloadData];}
+- (void)saveAndReload{ for(UITableViewCell*c in self.tableView.visibleCells) if([c.accessoryView isKindOfClass:UITextField.class]){UITextField*t=(id)c.accessoryView; if(t.tag==300)self.config.carrierName=t.text; if(t.tag==301)self.config.carrierMCC=t.text; if(t.tag==302)self.config.carrierMNC=t.text; if(t.tag==303)self.config.carrierISO=t.text; if(t.tag==304)self.config.radioTech=t.text;} [self.config save];}
+@end

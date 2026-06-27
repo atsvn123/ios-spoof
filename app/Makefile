@@ -7,27 +7,23 @@ include $(THEOS)/makefiles/common.mk
 APPLICATION_NAME = iOSSpoofApp
 
 iOSSpoofApp_FILES = \
-	iOSSpoofApp.swift \
-	Views/ContentView.swift \
-	Views/Theme.swift \
-	Views/StatusTabView.swift \
-	Views/DeviceTabView.swift \
-	Views/AppsTabView.swift \
-	Views/NetworkTabView.swift \
-	Views/GPSTabView.swift \
-	Views/CellularTabView.swift \
-	Views/DisplayTabView.swift \
-	Views/HardwareTabView.swift \
-	Models/SpoofConfig.swift \
-	Models/DevicePreset.swift \
-	Models/PresetManager.swift \
-	Models/DaemonClient.swift \
-	Models/AppsViewModel.swift
+	ObjC/main.m \
+	ObjC/SCAppDelegate.m \
+	ObjC/SCTabBarController.m \
+	ObjC/Models/SCAppConfig.m \
+	ObjC/Models/SCDevicePresetStore.m \
+	ObjC/Controllers/SCBaseTableViewController.m \
+	ObjC/Controllers/SCStatusViewController.m \
+	ObjC/Controllers/SCDeviceViewController.m \
+	ObjC/Controllers/SCAppsViewController.m \
+	ObjC/Controllers/SCNetworkViewController.m \
+	ObjC/Controllers/SCGPSViewController.m \
+	ObjC/Controllers/SCCellularViewController.m \
+	ObjC/Controllers/SCHardwareViewController.m
 
-iOSSpoofApp_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-iOSSpoofApp_FRAMEWORKS = UIKit SwiftUI Foundation CoreLocation CoreTelephony SystemConfiguration MapKit
-iOSSpoofApp_PRIVATE_FRAMEWORKS = IOKit
-iOSSpoofApp_LDFLAGS = -Wl,-undefined,dynamic_lookup -Wl,-w
+iOSSpoofApp_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-arc-performSelector-leaks
+iOSSpoofApp_FRAMEWORKS = UIKit Foundation CoreLocation CoreTelephony SystemConfiguration
+iOSSpoofApp_LDFLAGS = -Wl,-w
 
 iOSSpoofApp_INSTALL_PATH = /Applications
 iOSSpoofApp_CODESIGN_FLAGS = -S

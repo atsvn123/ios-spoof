@@ -31,12 +31,4 @@ fi
 killall -9 lsd >/dev/null 2>&1 || true
 killall -9 iconservicesagent >/dev/null 2>&1 || true
 
-if [ -x "/var/jb/usr/bin/sbreload" ]; then
-    /var/jb/usr/bin/sbreload >/dev/null 2>&1 || true
-elif [ -x "/usr/bin/sbreload" ]; then
-    /usr/bin/sbreload >/dev/null 2>&1 || true
-else
-    killall -9 SpringBoard >/dev/null 2>&1 || true
-fi
-
 exit 0

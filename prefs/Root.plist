@@ -4,28 +4,15 @@
 <dict>
     <key>items</key>
     <array>
+        <!-- ===== MASTER ===== -->
         <dict>
             <key>cell</key>
             <string>PSGroupCell</string>
             <key>label</key>
-            <string>Target Apps</string>
+            <string>Trạng thái</string>
             <key>footerText</key>
-            <string>Nhập bundle ID của app cần spoof, phân tách bằng dấu phẩy. Ví dụ: com.example.app. Để trống = không spoof app nào (an toàn). Cần respring để áp dụng.</string>
+            <string>Bật spoofing, chọn ứng dụng cần spoof, sau đó bấm Áp dụng &amp; Respring.</string>
         </dict>
-        <dict>
-            <key>cell</key>
-            <string>PSEditTextCell</string>
-            <key>label</key>
-            <string>Bundle IDs</string>
-            <key>set</key>
-            <string>setTargetBundles:forSpecifier:</string>
-            <key>get</key>
-            <string>readTargetBundles:</string>
-            <key>placeholder</key>
-            <string>com.example.app1,com.example.app2</string>
-        </dict>
-
-        <!-- ===== MASTER ===== -->
         <dict>
             <key>cell</key>
             <string>PSSwitchCell</string>
@@ -39,6 +26,26 @@
             <string>readEnabled:</string>
             <key>defaults</key>
             <string>com.iosspoof.tweak</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSLinkCell</string>
+            <key>label</key>
+            <string>Chọn ứng dụng spoof</string>
+            <key>detail</key>
+            <string>SCAppListController</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSEditTextCell</string>
+            <key>label</key>
+            <string>Bundle IDs hiện tại</string>
+            <key>set</key>
+            <string>setTargetBundles:forSpecifier:</string>
+            <key>get</key>
+            <string>readTargetBundles:</string>
+            <key>placeholder</key>
+            <string>Chưa chọn app nào</string>
         </dict>
         <dict>
             <key>cell</key>
@@ -57,10 +64,38 @@
             <string>setProductType:forSpecifier:</string>
             <key>get</key>
             <string>readProductType:</string>
-            <key>valuesDataSource</key>
-            <string>readValues:</string>
-            <key>titlesDataSource</key>
-            <string>readTitlesForSpecifier:</string>
+            <key>validValues</key>
+            <array>
+                <string>random</string>
+                <string>iPhone10,1</string>
+                <string>iPhone10,3</string>
+                <string>iPhone12,1</string>
+                <string>iPhone13,2</string>
+                <string>iPhone14,5</string>
+                <string>iPhone14,2</string>
+                <string>iPhone14,7</string>
+                <string>iPhone15,2</string>
+                <string>iPhone15,3</string>
+                <string>iPhone15,4</string>
+                <string>iPhone16,1</string>
+                <string>iPhone16,2</string>
+            </array>
+            <key>validTitles</key>
+            <array>
+                <string>Random</string>
+                <string>iPhone 8</string>
+                <string>iPhone X</string>
+                <string>iPhone 11</string>
+                <string>iPhone 12</string>
+                <string>iPhone 13</string>
+                <string>iPhone 13 Pro</string>
+                <string>iPhone 14</string>
+                <string>iPhone 14 Pro</string>
+                <string>iPhone 14 Pro Max</string>
+                <string>iPhone 15</string>
+                <string>iPhone 15 Pro</string>
+                <string>iPhone 15 Pro Max</string>
+            </array>
         </dict>
         <dict>
             <key>cell</key>
@@ -109,8 +144,22 @@
             <key>label</key><string>Radio Access</string>
             <key>set</key><string>setRadioTech:forSpecifier:</string>
             <key>get</key><string>readRadioTech:</string>
-            <key>valuesDataSource</key><string>radioValues:</string>
-            <key>titlesDataSource</key><string>radioTitles:</string>
+            <key>validValues</key>
+            <array>
+                <string>CTRadioAccessTechnologyLTE</string>
+                <string>CTRadioAccessTechnologyNRNSA</string>
+                <string>CTRadioAccessTechnologyNR</string>
+                <string>CTRadioAccessTechnologyHSDPA</string>
+                <string>CTRadioAccessTechnologyEdge</string>
+            </array>
+            <key>validTitles</key>
+            <array>
+                <string>4G LTE</string>
+                <string>5G NR (NSA)</string>
+                <string>5G NR</string>
+                <string>3G HSDPA</string>
+                <string>2G EDGE</string>
+            </array>
         </dict>
 
         <!-- ===== GEO ===== -->
@@ -178,8 +227,16 @@
             <key>label</key><string>Loại</string>
             <key>set</key><string>setProxyType:forSpecifier:</string>
             <key>get</key><string>readProxyType:</string>
-            <key>valuesDataSource</key><string>proxyTypeValues:</string>
-            <key>titlesDataSource</key><string>proxyTypeTitles:</string>
+            <key>validValues</key>
+            <array>
+                <string>socks5</string>
+                <string>http</string>
+            </array>
+            <key>validTitles</key>
+            <array>
+                <string>SOCKS5</string>
+                <string>HTTP CONNECT</string>
+            </array>
         </dict>
         <dict>
             <key>cell</key><string>PSEditTextCell</string>

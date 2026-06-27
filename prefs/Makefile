@@ -5,5 +5,7 @@ iOSSpoofPrefs_FILES = SCRootListController.m ../src/SCDevicePresets.m
 iOSSpoofPrefs_CFLAGS = -fobjc-arc
 iOSSpoofPrefs_FRAMEWORKS = UIKit Foundation
 iOSSpoofPrefs_LDFLAGS = -undefined dynamic_lookup
+iOSSpoofPrefs_INSTALL_PATH = /Library/PreferenceBundles
+iOSSpoofPrefs_RESOURCE_FILES = entry.plist
 
 include $(THEOS_MAKE_PATH)/bundle.mk

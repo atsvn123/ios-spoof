@@ -12,7 +12,7 @@ struct DeviceTabView: View {
                 // Master Toggle
                 Section(footer: Text("Bật để kích hoạt spoofing cho các app đã chọn")) {
                     Toggle("Bật Spoof", isOn: $config.enabled)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                 }
                 
                 // Device Model
@@ -33,7 +33,7 @@ struct DeviceTabView: View {
                     }
                     
                     Toggle("Ngẫu nhiên mỗi lần mở app", isOn: $config.randomizeOnLaunch)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                 }
                 
                 // Device Info Preview
@@ -109,7 +109,7 @@ struct ModelPickerView: View {
                         Spacer()
                         if config.productType == "random" {
                             Image(systemName: "checkmark")
-                                .foregroundColor(.cyan)
+                                .foregroundColor(.scAccent)
                         }
                     }
                 }
@@ -130,7 +130,7 @@ struct ModelPickerView: View {
                             Spacer()
                             if config.productType == preset.productType {
                                 Image(systemName: "checkmark")
-                                    .foregroundColor(.cyan)
+                                    .foregroundColor(.scAccent)
                             }
                         }
                     }

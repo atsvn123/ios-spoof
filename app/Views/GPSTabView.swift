@@ -9,7 +9,7 @@ struct GPSTabView: View {
             List {
                 Section(header: Text("Vị trí GPS"), footer: Text("Hook CoreLocation để spoof vị trí GPS cho các app.")) {
                     Toggle("Bật Geo Spoofing", isOn: $config.geoEnabled)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                 }
                 
                 if config.geoEnabled {
@@ -67,7 +67,7 @@ struct GPSTabView: View {
                                 Text("Chọn vị trí trên bản đồ")
                             }
                         }
-                        .foregroundColor(.cyan)
+                        .foregroundColor(.scAccent)
                     }
                     
                     // Quick locations
@@ -117,7 +117,7 @@ struct QuickLocationRow: View {
         } label: {
             HStack {
                 Image(systemName: "location.fill")
-                    .foregroundColor(.cyan)
+                    .foregroundColor(.scAccent)
                 Text(name)
                     .foregroundColor(.primary)
                 Spacer()

@@ -24,7 +24,7 @@ struct StatusTabView: View {
                         Spacer()
                         Toggle("", isOn: $config.enabled)
                             .labelsHidden()
-                            .accentColor(.cyan)
+                            .accentColor(.scAccent)
                     }
 
                     if config.enabled && config.targetBundles.isEmpty {

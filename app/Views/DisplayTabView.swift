@@ -79,7 +79,7 @@ struct ScreenSizeOverrideView: View {
                 Button("Apply Override") {
                     // Apply override
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Screen Size")
@@ -101,7 +101,7 @@ struct BrightnessSpoofView: View {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Brightness")
@@ -126,7 +126,7 @@ struct DisplayScaleView: View {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Display Scale")

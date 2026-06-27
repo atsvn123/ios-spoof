@@ -31,7 +31,7 @@ struct HardwareTabView: View {
                 // Battery
                 Section(header: Text("Battery")) {
                     Toggle("Spoof Battery", isOn: $config.spoofBattery)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                     
                     if config.spoofBattery {
                         NavigationLink(destination:
@@ -93,7 +93,7 @@ struct StorageOverrideView: View {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Storage Override")
@@ -119,7 +119,7 @@ struct RAMOverrideView: View {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("RAM Override")
@@ -160,7 +160,7 @@ struct BatteryStateView: View {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Battery State")
@@ -178,25 +178,25 @@ struct CameraCapabilitiesView: View {
         List {
             Section(header: Text("Camera Hardware")) {
                 Toggle("Ultra-wide Camera", isOn: $hasUltraWide)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
                 Toggle("Telephoto Camera", isOn: $hasTelephoto)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
                 Toggle("LiDAR Sensor", isOn: $hasLiDAR)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
             }
             
             Section(header: Text("Features")) {
                 Toggle("ProRAW Support", isOn: $hasProRAW)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
                 Toggle("Cinematic Mode", isOn: $hasCinematicMode)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
             }
             
             Section {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Camera Capabilities")
@@ -214,25 +214,25 @@ struct SensorsView: View {
         List {
             Section(header: Text("Biometrics")) {
                 Toggle("Face ID", isOn: $hasFaceID)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
                 Toggle("Touch ID", isOn: $hasTouchID)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
             }
             
             Section(header: Text("Sensors")) {
                 Toggle("LiDAR Scanner", isOn: $hasLiDAR)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
                 Toggle("Barometer", isOn: $hasBarometer)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
                 Toggle("Magnetometer", isOn: $hasMagnetometer)
-                    .accentColor(.cyan)
+                    .accentColor(.scAccent)
             }
             
             Section {
                 Button("Apply") {
                     // Apply
                 }
-                .foregroundColor(.cyan)
+                .foregroundColor(.scAccent)
             }
         }
         .navigationTitle("Sensors")

@@ -18,56 +18,47 @@ struct AppsTabView: View {
 
     var body: some View {
         NavigationView {
-            List {
-                Section {
-                    HStack {
-                        Text("Đã chọn")
-                        Spacer()
-                        Text("\(viewModel.selectedApps.count) app")
-                            .foregroundColor(.cyan)
-                            .fontWeight(.medium)
+            ZStack {
+                List {
+                    Section {
+                        HStack {
+                            Text("Đã chọn")
+                            Spacer()
+                            Text("\(viewModel.selectedApps.count) app")
+                                .foregroundColor(.scAccent)
+                                .fontWeight(.medium)
+                        }
+
+                        Button {
+                            viewModel.select(filteredApps)
+                        } label: {
+                            Label("Chọn tất cả đang hiển thị", systemImage: "checkmark.circle.fill")
+                        }
+
+                        Button {
+                            viewModel.deselectAll()
+                        } label: {
+                            Label("Bỏ chọn tất cả", systemImage: "xmark.circle")
+                        }
+                        .foregroundColor(.red)
                     }
 
-                    Button {
-                        viewModel.select(filteredApps)
-                    } label: {
-                        Label("Chọn tất cả đang hiển thị", systemImage: "checkmark.circle.fill")
+                    Section {
+                        TextField("Tìm kiếm app...", text: $searchText)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                        Toggle("Hiển thị app hệ thống", isOn: $showSystemApps)
                     }
 
-                    Button {
-                        viewModel.deselectAll()
-                    } label: {
-                        Label("Bỏ chọn tất cả", systemImage: "xmark.circle")
-                    }
-                    .foregroundColor(.red)
-                }
-
-                Section {
-                    TextField("Tìm kiếm app...", text: $searchText)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                    Toggle("Hiển thị app hệ thống", isOn: $showSystemApps)
-                }
-
-                Section(header: Text("Ứng dụng đã cài (\(filteredApps.count))")) {
-                    ForEach(filteredApps) { app in
-                        AppRowView(app: app, isSelected: viewModel.isSelected(app)) {
-                            viewModel.toggle(app)
+                    Section(header: Text("Ứng dụng đã cài (\(filteredApps.count))")) {
+                        ForEach(filteredApps) { app in
+                            AppRowView(app: app, isSelected: viewModel.isSelected(app)) {
+                                viewModel.toggle(app)
+                            }
                         }
                     }
                 }
-            }
-            .navigationTitle("Ứng dụng")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        viewModel.loadApps()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
-            }
-            .overlay {
+
                 if viewModel.isLoading && viewModel.apps.isEmpty {
                     ProgressView("Đang tải ứng dụng...")
                 } else if viewModel.apps.isEmpty {
@@ -80,6 +71,16 @@ struct AppsTabView: View {
                         Text("Đảm bảo app chạy trên thiết bị đã jailbreak")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Ứng dụng")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        viewModel.loadApps()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
                     }
                 }
             }
@@ -104,10 +105,10 @@ struct AppRowView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color.gray.opacity(0.3))
                         .frame(width: 40, height: 40)
-                        .overlay {
+                        .overlay(
                             Image(systemName: "app.fill")
                                 .foregroundColor(.gray)
-                        }
+                        )
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -123,7 +124,7 @@ struct AppRowView: View {
 
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.cyan)
+                        .foregroundColor(.scAccent)
                         .font(.title2)
                 } else {
                     Image(systemName: "circle")

@@ -95,7 +95,7 @@ struct QuickCarrierRow: View {
         } label: {
             HStack {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundColor(.cyan)
+                    .foregroundColor(.scAccent)
                 Text(name)
                     .foregroundColor(.primary)
                 Spacer()

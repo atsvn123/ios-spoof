@@ -11,7 +11,7 @@ struct NetworkTabView: View {
             List {
                 Section(header: Text("Transparent Proxy"), footer: Text("Proxy trong suốt qua PF divert. App không phát hiện được proxy.")) {
                     Toggle("Bật Proxy", isOn: $config.proxyEnabled)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                 }
                 
                 if config.proxyEnabled {
@@ -62,28 +62,28 @@ struct NetworkTabView: View {
                     
                     Section(footer: Text("Cần proxy hỗ trợ UDP associate cho DNS, QUIC, gaming...")) {
                         Toggle("Hỗ trợ UDP (SOCKS5)", isOn: $config.proxyUDP)
-                            .accentColor(.cyan)
+                            .accentColor(.scAccent)
                     }
                 }
                 
                 // Anti-detect
                 Section(header: Text("Anti-Detect"), footer: Text("Hook các API để ẩn dấu vết proxy/VPN/jailbreak.")) {
                     Toggle("Ẩn Proxy Settings", isOn: $config.hideProxy)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                     Toggle("Ẩn VPN Interface", isOn: $config.hideVPN)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                     Toggle("Ẩn Jailbreak", isOn: $config.hideJailbreak)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                 }
 
                 // ID Spoofing
                 Section(header: Text("ID Spoofing")) {
                     Toggle("Spoof IDFA", isOn: $config.spoofIDFA)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                     Toggle("Spoof IDFV", isOn: $config.spoofIDFV)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                     Toggle("Spoof Battery", isOn: $config.spoofBattery)
-                        .accentColor(.cyan)
+                        .accentColor(.scAccent)
                 }
                 
                 // Daemon Status
@@ -110,7 +110,7 @@ struct NetworkTabView: View {
                             Text("Kiểm tra scproxyd")
                         }
                     }
-                    .foregroundColor(.cyan)
+                    .foregroundColor(.scAccent)
                 }
             }
             .navigationTitle("Network")

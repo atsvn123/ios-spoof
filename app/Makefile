@@ -9,6 +9,7 @@ APPLICATION_NAME = iOSSpoofApp
 iOSSpoofApp_FILES = \
 	iOSSpoofApp.swift \
 	Views/ContentView.swift \
+	Views/Theme.swift \
 	Views/StatusTabView.swift \
 	Views/DeviceTabView.swift \
 	Views/AppsTabView.swift \

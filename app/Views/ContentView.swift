@@ -54,6 +54,6 @@ struct ContentView: View {
                 }
                 .tag(6)
         }
-        .accentColor(.cyan)
+        .accentColor(.scAccent)
     }
 }

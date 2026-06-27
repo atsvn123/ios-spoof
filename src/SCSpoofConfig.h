@@ -59,6 +59,20 @@
 @property (nonatomic, readonly) BOOL spoofIDFV;
 @property (nonatomic, readonly) BOOL spoofBattery;
 
+// Network mode: 0=default, 1=wifi, 2=cellular
+@property (nonatomic, readonly) NSInteger networkMode;
+@property (nonatomic, readonly) NSString *wifiSSID;
+@property (nonatomic, readonly) NSString *wifiBSSID;
+// iOS version spoof
+@property (nonatomic, readonly) NSString *systemVersion;
+// Storage spoof (GB)
+@property (nonatomic, readonly) NSUInteger totalStorage;
+@property (nonatomic, readonly) NSUInteger freeStorage;
+// Power state
+@property (nonatomic, readonly) BOOL lowPowerMode;
+@property (nonatomic, readonly) NSString *buildID;
+@property (nonatomic, readonly) NSString *uniqueID;
+
 /** Danh sách bundle ID mục tiêu. Nếu rỗng = không inject vào app nào. */
 @property (nonatomic, readonly) NSArray *targetBundles;
 

@@ -51,6 +51,16 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic, copy) NSString *geoIPCountry;
 @property (nonatomic, copy) NSString *geoIPIsp;
 
+// iOS version / system spoof
+@property (nonatomic, copy) NSString *systemVersion;
+@property (nonatomic, copy) NSString *buildID;
+@property (nonatomic, copy) NSString *uniqueID;
+// Storage spoof (GB)
+@property (nonatomic) NSUInteger totalStorage;
+@property (nonatomic) NSUInteger freeStorage;
+// Power state
+@property (nonatomic) BOOL lowPowerMode;
+
 + (instancetype)shared;
 - (void)load;
 - (void)save;

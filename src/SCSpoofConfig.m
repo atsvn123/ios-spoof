@@ -7,13 +7,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 #define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
-@interface SCSpoofConfig ()
-{
-    NSDictionary *_raw;
-    SCDevicePreset *_resolved;
-    NSString *_bundleID;
-    NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa;
-}
+@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; }
 @end
 
 @implementation SCSpoofConfig
@@ -76,6 +70,16 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _spoofIDFA = SC_READ_BOOL_DEF(@"spoofIDFA", YES);
     _spoofIDFV = SC_READ_BOOL_DEF(@"spoofIDFV", YES);
     _spoofBattery = SC_READ_BOOL_DEF(@"spoofBattery", YES);
+
+    _networkMode = d[@"networkMode"] ? [d[@"networkMode"] integerValue] : 0;
+    _wifiSSID = SC_READ_STR(@"wifiSSID") ?: @"MyWiFi";
+    _wifiBSSID = SC_READ_STR(@"wifiBSSID") ?: @"02:00:00:00:00:00";
+    _systemVersion = SC_READ_STR(@"systemVersion") ?: @"17.5";
+    _totalStorage = d[@"totalStorage"] ? [d[@"totalStorage"] unsignedIntegerValue] : 0;
+    _freeStorage = d[@"freeStorage"] ? [d[@"freeStorage"] unsignedIntegerValue] : 0;
+    _lowPowerMode = SC_READ_BOOL(@"lowPowerMode");
+    _buildID = SC_READ_STR(@"buildID");
+    _uniqueID = SC_READ_STR(@"uniqueID");
 
     id tb = d[@"targetBundles"];
     if ([tb isKindOfClass:[NSArray class]]) {
@@ -201,5 +205,14 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (NSString *)spoofedIMEI { return _imei; }
 - (NSString *)spoofedMAC { return _mac; }
 - (NSString *)spoofedIDFA { return _idfa; }
+- (NSInteger)networkMode { return _networkMode; }
+- (NSString *)wifiSSID { return _wifiSSID; }
+- (NSString *)wifiBSSID { return _wifiBSSID; }
+- (NSString *)systemVersion { return _systemVersion; }
+- (NSUInteger)totalStorage { return _totalStorage; }
+- (NSUInteger)freeStorage { return _freeStorage; }
+- (BOOL)lowPowerMode { return _lowPowerMode; }
+- (NSString *)buildID { return _buildID; }
+- (NSString *)uniqueID { return _uniqueID; }
 
 @end

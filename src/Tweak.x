@@ -5,6 +5,7 @@
 #import <sys/sysctl.h>
 #import <sys/stat.h>
 #import <sys/utsname.h>
+#import <sys/mount.h>
 #import <net/if.h>
 #import <mach/mach.h>
 #import <dlfcn.h>
@@ -60,6 +61,7 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
     return %orig;
 }
 - (NSString *)systemVersion {
+    if (SC_ON() && CFG().systemVersion) return CFG().systemVersion;
     return %orig;
 }
 - (NSUUID *)identifierForVendor {
@@ -196,6 +198,95 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
     }
     return orig_IORegistryEntryCreateCFProperty(entry, key, allocator, options);
 }
+
+// ============================================================================
+//  4b. Storage / Disk space spoofing
+// ============================================================================
+
+static NSNumber *(*orig_statfs)(const char *, struct statfs *);
+static int sc_statfs(const char *path, struct statfs *buf) {
+    int r = orig_statfs(path, buf);
+    if (r == 0 && SC_ON() && CFG().totalStorage > 0) {
+        unsigned long long total = (unsigned long long)CFG().totalStorage * 1024ULL * 1024ULL * 1024ULL;
+        unsigned long long free = (unsigned long long)(CFG().freeStorage > 0 ? CFG().freeStorage : CFG().totalStorage / 2) * 1024ULL * 1024ULL * 1024ULL;
+        buf->f_blocks = total / buf->f_bsize;
+        buf->f_bfree = free / buf->f_bsize;
+        buf->f_bavail = free / buf->f_bsize;
+    }
+    return r;
+}
+
+// ============================================================================
+//  4c. NSProcessInfo - processorCount, physicalMemory, thermalState
+// ============================================================================
+
+%hook NSProcessInfo
+- (NSUInteger)processorCount {
+    if (SC_ON() && P()) {
+        // A-series: 6 cores for modern devices
+        return 6;
+    }
+    return %orig;
+}
+- (uint64_t)physicalMemory {
+    if (SC_ON() && P()) {
+        // 6GB = 6 * 1024^3
+        return 6ULL * 1024ULL * 1024ULL * 1024ULL;
+    }
+    return %orig;
+}
+- (NSString *)operatingSystemVersionString {
+    if (SC_ON() && CFG().systemVersion) {
+        return [NSString stringWithFormat:@"Version %@ (Build %@)", CFG().systemVersion, CFG().buildID ?: @"21F90"];
+    }
+    return %orig;
+}
+- (NSProcessInfoThermalState)thermalState {
+    if (SC_ON()) return NSProcessInfoThermalStateNominal;
+    return %orig;
+}
+- (BOOL)isLowPowerModeEnabled {
+    if (SC_ON()) return CFG().lowPowerMode;
+    return %orig;
+}
+%end
+
+// ============================================================================
+//  4d. UIDevice power state
+// ============================================================================
+
+%hook UIDevice
+- (BOOL)isBatteryMonitoringEnabled {
+    if (SC_ON() && CFG().spoofBattery) return YES;
+    return %orig;
+}
+%end
+
+// ============================================================================
+//  4e. User-Agent spoofing (NSMutableURLRequest / NSURLSession)
+// ============================================================================
+
+%hook NSMutableURLRequest
+- (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
+    if (SC_ON() && [field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
+        return; // Don't let app override our UA
+    }
+    %orig;
+}
+%end
+
+%hook NSURLSessionConfiguration
+- (NSString *)HTTPAdditionalHeaders {
+    NSDictionary *d = %orig;
+    if (SC_ON() && CFG().systemVersion) {
+        NSString *ua = [NSString stringWithFormat:@"Mozilla/5.0 (iPhone; CPU iPhone OS %@ like Mac OS X)", CFG().systemVersion];
+        NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
+        m[@"User-Agent"] = ua;
+        return [m copy];
+    }
+    return d;
+}
+%end
 
 // ============================================================================
 //  5. AdSupport - IDFA
@@ -439,5 +530,6 @@ static NSSet *sc_protected_bundles(void) {
         MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
         MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
         MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
+        MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
     }
 }

@@ -65,6 +65,12 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.geoIPCity = d[@"geoIPCity"] ?: @"";
     self.geoIPCountry = d[@"geoIPCountry"] ?: @"";
     self.geoIPIsp = d[@"geoIPIsp"] ?: @"";
+    self.systemVersion = d[@"systemVersion"] ?: @"17.5";
+    self.buildID = d[@"buildID"] ?: @"";
+    self.uniqueID = d[@"uniqueID"] ?: @"";
+    self.totalStorage = d[@"totalStorage"] ? [d[@"totalStorage"] unsignedIntegerValue] : 0;
+    self.freeStorage = d[@"freeStorage"] ? [d[@"freeStorage"] unsignedIntegerValue] : 0;
+    self.lowPowerMode = d[@"lowPowerMode"] ? [d[@"lowPowerMode"] boolValue] : NO;
 }
 
 - (void)save {
@@ -105,6 +111,12 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"geoIPCity"] = self.geoIPCity ?: @"";
     d[@"geoIPCountry"] = self.geoIPCountry ?: @"";
     d[@"geoIPIsp"] = self.geoIPIsp ?: @"";
+    d[@"systemVersion"] = self.systemVersion ?: @"17.5";
+    d[@"buildID"] = self.buildID ?: @"";
+    d[@"uniqueID"] = self.uniqueID ?: @"";
+    d[@"totalStorage"] = @(self.totalStorage);
+    d[@"freeStorage"] = @(self.freeStorage);
+    d[@"lowPowerMode"] = @(self.lowPowerMode);
     [d writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }

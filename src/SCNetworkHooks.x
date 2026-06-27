@@ -246,9 +246,16 @@ char *sc_if_indextoname(unsigned int ifindex, char *ifname) {
 Boolean (*orig_SCNetworkReachabilityGetFlags)(SCNetworkReachabilityRef, SCNetworkReachabilityFlags *);
 Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetworkReachabilityFlags *flags) {
     Boolean r = orig_SCNetworkReachabilityGetFlags(ref, flags);
-    if (r && SC_ON() && CFG().hideVPN && flags) {
-        // Xóa flag connection required / is WWAN nếu cần; chủ yếu giữ flag reachability
-        // để app thấy WiFi/WWAN bình thường.
+    if (r && SC_ON() && flags) {
+        // networkMode 2 = fake cellular: set WWAN flag, clear WiFi
+        if (CFG().networkMode == 2) {
+            *flags |= kSCNetworkReachabilityFlagsIsWWAN;
+            *flags &= ~kSCNetworkReachabilityFlagsIsDirect;
+        }
+        // networkMode 1 = fake WiFi: clear WWAN flag
+        else if (CFG().networkMode == 1) {
+            *flags &= ~kSCNetworkReachabilityFlagsIsWWAN;
+        }
     }
     return r;
 }

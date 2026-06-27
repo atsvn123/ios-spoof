@@ -36,19 +36,27 @@ jobs:
         run: brew install ldid make perl
 
       - name: Install Theos
-        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ~/theos
-          git clone --recursive https://github.com/theos/theos.git ~/theos
+          if [ -d "$HOME/theos/.git" ]; then
+            git -C "$HOME/theos" submodule update --init --recursive
+          elif [ -d "$HOME/theos" ] && [ "$(ls -A "$HOME/theos")" ]; then
+            rm -rf "$HOME/theos"
+            git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          else
+            mkdir -p "$HOME/theos"
+            git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          fi
           # Install SDKs
-          curl -L -o ~/theos/sdks.tar.xz https://github.com/theos/sdks/releases/latest/download/sdks.tar.xz || true
-          if [ -f ~/theos/sdks.tar.xz ]; then
-            tar -xf ~/theos/sdks.tar.xz -C ~/theos/sdks/ 2>/dev/null || true
+          mkdir -p "$HOME/theos/sdks"
+          curl -L -o "$HOME/theos/sdks.tar.xz" https://github.com/theos/sdks/releases/latest/download/sdks.tar.xz || true
+          if [ -f "$HOME/theos/sdks.tar.xz" ]; then
+            tar -xf "$HOME/theos/sdks.tar.xz" -C "$HOME/theos/sdks/" 2>/dev/null || true
           fi
           # Fallback: clone SDK repo
-          if [ ! -d ~/theos/sdks/iPhoneOS16.5.sdk ]; then
+          if ! ls "$HOME/theos/sdks"/iPhoneOS*.sdk >/dev/null 2>&1; then
+            rm -rf /tmp/sdks
             git clone https://github.com/theos/sdks.git /tmp/sdks
-            cp -R /tmp/sdks/*.sdk ~/theos/sdks/ 2>/dev/null || true
+            cp -R /tmp/sdks/*.sdk "$HOME/theos/sdks/" 2>/dev/null || true
           fi
 
       - name: Verify Theos

@@ -2,6 +2,8 @@
 #import "SCDevicePresetStore.h"
 #import "SCLocaleStore.h"
 #import <CoreFoundation/CoreFoundation.h>
+#import <dlfcn.h>
+#import <stdlib.h>
 
 NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.changed";
 

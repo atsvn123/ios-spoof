@@ -76,6 +76,10 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic, copy) NSString *timezoneIdentifier;
 @property (nonatomic) NSTimeInterval timestampOffset;
 
+// Kernel-Level Spoof mode
+@property (nonatomic) BOOL kernelMode;
++ (BOOL)systemhookInstalled;
+
 + (instancetype)shared;
 - (void)load;
 - (void)save;

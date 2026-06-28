@@ -29,11 +29,11 @@
     return total > 0 ? total / 3 : 0;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 9; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 10; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
-        case 0: return 3;  // Status
+        case 0: return 4;  // Status + Kernel Mode
         case 1: return 14; // Device info
         case 2: return 4;  // Carrier
         case 3: return 6;  // GPS
@@ -55,8 +55,16 @@
     switch (i.section) {
         case 0: {
             if (i.row == 0) return [self switchCellWithTitle:@"Bật Spoof" on:self.config.enabled action:@selector(toggleEnabled:)];
-            if (i.row == 1) return [self cellWithTitle:@"Target Apps" detail:[NSString stringWithFormat:@"%lu app", (unsigned long)self.config.targetBundles.count]];
-            return [self cellWithTitle:@"Random IDs mỗi launch" detail:self.config.randomizeOnLaunch ? @"Bật" : @"Tắt"];
+            if (i.row == 1) return [self switchCellWithTitle:@"Kernel-Level Spoof" on:self.config.kernelMode action:@selector(toggleKernelMode:)];
+            if (i.row == 2) {
+                BOOL installed = [SCAppConfig systemhookInstalled];
+                UITableViewCell *c = [self cellWithTitle:@"Daemon" detail:installed ? @"Đã cài đặt" : @"Chưa cài đặt"];
+                c.detailTextLabel.textColor = installed ? [UIColor systemGreenColor] : [UIColor systemRedColor];
+                return c;
+            }
+            return [self cellWithTitle:@"Target Apps" detail:[NSString stringWithFormat:@"%lu app", (unsigned long)self.config.targetBundles.count]];
+        }
+            return [self cellWithTitle:@"Target Apps" detail:[NSString stringWithFormat:@"%lu app", (unsigned long)self.config.targetBundles.count]];
         }
         case 1: {
             NSArray *keys = @[@"marketingName", @"productType", @"hardwareModel", @"modelNumber", @"chipId", @"cpuArchitecture", @"capacityGB", @"screenWidth", @"screenHeight", @"screenScale", @"screenInches", @"ppi", @"boardId", @"deviceClass"];
@@ -137,5 +145,10 @@
 }
 
 - (void)toggleEnabled:(UISwitch *)sw { self.config.enabled = sw.on; [self.config save]; }
+- (void)toggleKernelMode:(UISwitch *)sw {
+    self.config.kernelMode = sw.on;
+    [self.config save];
+    [self.tableView reloadData];
+}
 
 @end

@@ -84,7 +84,10 @@
 // Locale / Timezone / Timestamp
 @property (nonatomic, readonly) NSString *localeIdentifier;  // e.g. "en_US"
 @property (nonatomic, readonly) NSString *timezoneIdentifier; // e.g. "Asia/Ho_Chi_Minh"
-@property (nonatomic, readonly) NSTimeInterval timestampOffset; // seconds to offset
+@property (nonatomic, readonly) NSTimeInterval timestampOffset;
+
+// Kernel-Level Spoof mode
+@property (nonatomic, readonly) BOOL kernelMode; // seconds to offset
 
 /** Danh sách bundle ID mục tiêu. Nếu rỗng = không inject vào app nào. */
 @property (nonatomic, readonly) NSArray *targetBundles;

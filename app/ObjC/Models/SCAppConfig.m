@@ -7,6 +7,29 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
 
 @implementation SCAppConfig
 
++ (BOOL)systemhookInstalled {
+    // Check if custom roothide with iOSSpoof systemhook is installed
+    // Look for the env var set by iosspoof_system_init()
+    if (getenv("SC_SYSTEMHOOK_ACTIVE")) return YES;
+    // Check if systemhook.dylib exists and contains iosspoof_system_init symbol
+    void *handle = dlopen("/usr/lib/systemhook.dylib", RTLD_NOLOAD);
+    if (handle) {
+        if (dlsym(handle, "iosspoof_system_init")) return YES;
+    }
+    // Also check jbroot path
+    NSArray *paths = @[
+        @"/var/jb/usr/lib/systemhook.dylib",
+        @"/usr/lib/systemhook.dylib",
+    ];
+    for (NSString *p in paths) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p]) {
+            void *h = dlopen([p UTF8String], RTLD_NOLOAD);
+            if (h && dlsym(h, "iosspoof_system_init")) return YES;
+        }
+    }
+    return NO;
+}
+
 + (instancetype)shared {
     static SCAppConfig *cfg;
     static dispatch_once_t once;
@@ -80,6 +103,7 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.localeIdentifier = d[@"localeIdentifier"] ?: @"";
     self.timezoneIdentifier = d[@"timezoneIdentifier"] ?: @"";
     self.timestampOffset = d[@"timestampOffset"] ? [d[@"timestampOffset"] doubleValue] : 0;
+    self.kernelMode = d[@"kernelMode"] ? [d[@"kernelMode"] boolValue] : NO;
 }
 
 - (void)save {
@@ -134,6 +158,7 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"localeIdentifier"] = self.localeIdentifier ?: @"";
     d[@"timezoneIdentifier"] = self.timezoneIdentifier ?: @"";
     d[@"timestampOffset"] = @(self.timestampOffset);
+    d[@"kernelMode"] = @(self.kernelMode);
     [d writeToFile:[self prefsPath] atomically:YES];
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }

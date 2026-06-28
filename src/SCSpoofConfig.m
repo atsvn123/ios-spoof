@@ -7,7 +7,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 #define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
-@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; }
+@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; }
 @end
 
 @implementation SCSpoofConfig
@@ -106,6 +106,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _localeIdentifier = SC_READ_STR(@"localeIdentifier");
     _timezoneIdentifier = SC_READ_STR(@"timezoneIdentifier");
     _timestampOffset = [d[@"timestampOffset"] doubleValue];
+    _kernelMode = [d[@"kernelMode"] boolValue];
 
     id tb = d[@"targetBundles"];
     if ([tb isKindOfClass:[NSArray class]]) {
@@ -270,5 +271,6 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (NSString *)localeIdentifier { return _localeIdentifier; }
 - (NSString *)timezoneIdentifier { return _timezoneIdentifier; }
 - (NSTimeInterval)timestampOffset { return _timestampOffset; }
+- (BOOL)kernelMode { return _kernelMode; }
 
 @end

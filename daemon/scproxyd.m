@@ -233,15 +233,50 @@ static BOOL sc_pf_clear(void) {
     return rc == 0;
 }
 
+typedef SCPreferencesRef (*SCPreferencesCreateFn)(CFAllocatorRef, CFStringRef, CFStringRef);
+typedef CFPropertyListRef (*SCPreferencesGetValueFn)(SCPreferencesRef, CFStringRef);
+typedef CFPropertyListRef (*SCPreferencesPathGetValueFn)(SCPreferencesRef, CFStringRef);
+typedef Boolean (*SCPreferencesPathSetValueFn)(SCPreferencesRef, CFStringRef, CFPropertyListRef);
+typedef Boolean (*SCPreferencesCommitChangesFn)(SCPreferencesRef);
+typedef Boolean (*SCPreferencesApplyChangesFn)(SCPreferencesRef);
+
+static SCPreferencesCreateFn p_SCPreferencesCreate;
+static SCPreferencesGetValueFn p_SCPreferencesGetValue;
+static SCPreferencesPathGetValueFn p_SCPreferencesPathGetValue;
+static SCPreferencesPathSetValueFn p_SCPreferencesPathSetValue;
+static SCPreferencesCommitChangesFn p_SCPreferencesCommitChanges;
+static SCPreferencesApplyChangesFn p_SCPreferencesApplyChanges;
+
+static BOOL sc_load_scpreferences(void) {
+    static BOOL attempted = NO;
+    static BOOL loaded = NO;
+    if (attempted) return loaded;
+    attempted = YES;
+    void *sc = dlopen("/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration", RTLD_NOW);
+    if (!sc) return NO;
+    p_SCPreferencesCreate = (SCPreferencesCreateFn)dlsym(sc, "SCPreferencesCreate");
+    p_SCPreferencesGetValue = (SCPreferencesGetValueFn)dlsym(sc, "SCPreferencesGetValue");
+    p_SCPreferencesPathGetValue = (SCPreferencesPathGetValueFn)dlsym(sc, "SCPreferencesPathGetValue");
+    p_SCPreferencesPathSetValue = (SCPreferencesPathSetValueFn)dlsym(sc, "SCPreferencesPathSetValue");
+    p_SCPreferencesCommitChanges = (SCPreferencesCommitChangesFn)dlsym(sc, "SCPreferencesCommitChanges");
+    p_SCPreferencesApplyChanges = (SCPreferencesApplyChangesFn)dlsym(sc, "SCPreferencesApplyChanges");
+    loaded = p_SCPreferencesCreate && p_SCPreferencesGetValue && p_SCPreferencesPathGetValue &&
+             p_SCPreferencesPathSetValue && p_SCPreferencesCommitChanges && p_SCPreferencesApplyChanges;
+    return loaded;
+}
+
 static BOOL sc_system_proxy_apply(void) {
-    SCPreferencesRef prefs = SCPreferencesCreate(NULL, CFSTR("com.iosspoof.scproxyd"), NULL);
+    if (!sc_load_scpreferences()) return NO;
+    SCPreferencesRef prefs = p_SCPreferencesCreate(NULL, CFSTR("com.iosspoof.scproxyd"), NULL);
     if (!prefs) return NO;
-    NSDictionary *services = CFBridgingRelease(SCPreferencesGetValue(prefs, CFSTR("NetworkServices")) ? CFRetain(SCPreferencesGetValue(prefs, CFSTR("NetworkServices"))) : NULL);
+    CFPropertyListRef servicesRef = p_SCPreferencesGetValue(prefs, CFSTR("NetworkServices"));
+    NSDictionary *services = CFBridgingRelease(servicesRef ? CFRetain(servicesRef) : NULL);
     if (![services isKindOfClass:NSDictionary.class]) { CFRelease(prefs); return NO; }
 
     for (NSString *serviceID in services) {
         NSString *path = [NSString stringWithFormat:@"/NetworkServices/%@/Proxies", serviceID];
-        NSDictionary *existing = CFBridgingRelease(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path) ? CFRetain(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path)) : NULL);
+        CFPropertyListRef existingRef = p_SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path);
+        NSDictionary *existing = CFBridgingRelease(existingRef ? CFRetain(existingRef) : NULL);
         NSMutableDictionary *proxies = [NSMutableDictionary dictionaryWithDictionary:existing ?: @{}];
         [proxies removeObjectsForKeys:@[@"HTTPEnable", @"HTTPProxy", @"HTTPPort", @"HTTPSEnable", @"HTTPSProxy", @"HTTPSPort", @"SOCKSEnable", @"SOCKSProxy", @"SOCKSPort", @"SOCKSUser", @"SOCKSPassword"]];
         if (strcmp(g_state.proxyType, "http") == 0) {
@@ -258,26 +293,29 @@ static BOOL sc_system_proxy_apply(void) {
             if (g_state.user[0]) proxies[@"SOCKSUser"] = @(g_state.user);
             if (g_state.pass[0]) proxies[@"SOCKSPassword"] = @(g_state.pass);
         }
-        SCPreferencesPathSetValue(prefs, (__bridge CFStringRef)path, (__bridge CFDictionaryRef)proxies);
+        p_SCPreferencesPathSetValue(prefs, (__bridge CFStringRef)path, (__bridge CFDictionaryRef)proxies);
     }
-    BOOL ok = SCPreferencesCommitChanges(prefs) && SCPreferencesApplyChanges(prefs);
+    BOOL ok = p_SCPreferencesCommitChanges(prefs) && p_SCPreferencesApplyChanges(prefs);
     CFRelease(prefs);
     return ok;
 }
 
 static BOOL sc_system_proxy_clear(void) {
-    SCPreferencesRef prefs = SCPreferencesCreate(NULL, CFSTR("com.iosspoof.scproxyd"), NULL);
+    if (!sc_load_scpreferences()) return NO;
+    SCPreferencesRef prefs = p_SCPreferencesCreate(NULL, CFSTR("com.iosspoof.scproxyd"), NULL);
     if (!prefs) return NO;
-    NSDictionary *services = CFBridgingRelease(SCPreferencesGetValue(prefs, CFSTR("NetworkServices")) ? CFRetain(SCPreferencesGetValue(prefs, CFSTR("NetworkServices"))) : NULL);
+    CFPropertyListRef servicesRef = p_SCPreferencesGetValue(prefs, CFSTR("NetworkServices"));
+    NSDictionary *services = CFBridgingRelease(servicesRef ? CFRetain(servicesRef) : NULL);
     if (![services isKindOfClass:NSDictionary.class]) { CFRelease(prefs); return NO; }
     for (NSString *serviceID in services) {
         NSString *path = [NSString stringWithFormat:@"/NetworkServices/%@/Proxies", serviceID];
-        NSDictionary *existing = CFBridgingRelease(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path) ? CFRetain(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path)) : NULL);
+        CFPropertyListRef existingRef = p_SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path);
+        NSDictionary *existing = CFBridgingRelease(existingRef ? CFRetain(existingRef) : NULL);
         NSMutableDictionary *proxies = [NSMutableDictionary dictionaryWithDictionary:existing ?: @{}];
         [proxies removeObjectsForKeys:@[@"HTTPEnable", @"HTTPProxy", @"HTTPPort", @"HTTPSEnable", @"HTTPSProxy", @"HTTPSPort", @"SOCKSEnable", @"SOCKSProxy", @"SOCKSPort", @"SOCKSUser", @"SOCKSPassword"]];
-        SCPreferencesPathSetValue(prefs, (__bridge CFStringRef)path, (__bridge CFDictionaryRef)proxies);
+        p_SCPreferencesPathSetValue(prefs, (__bridge CFStringRef)path, (__bridge CFDictionaryRef)proxies);
     }
-    BOOL ok = SCPreferencesCommitChanges(prefs) && SCPreferencesApplyChanges(prefs);
+    BOOL ok = p_SCPreferencesCommitChanges(prefs) && p_SCPreferencesApplyChanges(prefs);
     CFRelease(prefs);
     return ok;
 }

@@ -60,6 +60,21 @@ static BOOL SC_ON()         { return CFG().enabled; }
 static BOOL SCCellularMode(void) { return SC_ON() && CFG().networkMode == 2; }
 static BOOL SCWiFiMode(void)     { return SC_ON() && CFG().networkMode == 1; }
 
+static BOOL SCShouldHideProxyForCurrentCaller(void) {
+    if (!SC_ON() || !CFG().hideProxy) return NO;
+    if (!CFG().proxyEnabled) return YES;
+
+    Dl_info info = {0};
+    void *caller = __builtin_return_address(0);
+    if (caller && dladdr(caller, &info) && info.dli_fname) {
+        NSString *image = [NSString stringWithUTF8String:info.dli_fname];
+        if ([image hasPrefix:@"/System/Library/"] || [image hasPrefix:@"/usr/lib/"]) {
+            return NO; // Let Apple networking stack see the proxy so traffic still works.
+        }
+    }
+    return YES;
+}
+
 static BOOL SCIsWiFiInterfaceName(const char *name) {
     return name && (!strcmp(name, "en0") || !strncmp(name, "awdl", 4) || !strncmp(name, "llw", 3));
 }
@@ -247,7 +262,7 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 CFDictionaryRef (*orig_CFNetworkCopySystemProxySettings)(void);
 CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
     CFDictionaryRef r = orig_CFNetworkCopySystemProxySettings();
-    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled) {
+    if (SCShouldHideProxyForCurrentCaller()) {
         // Trả về dict rỗng (no proxy) để app không thấy HTTP proxy
         if (r) CFRelease(r);
         return CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
@@ -257,7 +272,7 @@ CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
 
 CFArrayRef (*orig_CFNetworkCopyProxiesForURL)(CFURLRef, CFDictionaryRef);
 CFArrayRef sc_CFNetworkCopyProxiesForURL(CFURLRef url, CFDictionaryRef settings) {
-    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled) {
+    if (SCShouldHideProxyForCurrentCaller()) {
         // Trả về empty array -> không proxy
         return CFArrayCreate(NULL, NULL, 0, NULL);
     }
@@ -297,7 +312,7 @@ CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRe
         }
     }
 
-    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled && key) {
+    if (SCShouldHideProxyForCurrentCaller() && key) {
         NSString *k = (__bridge NSString *)key;
         // ẩn HTTP proxy, HTTPS proxy, SOCKS, auto proxy
         if ([k containsString:@"Proxy"] || [k containsString:@"proxy"] ||
@@ -336,7 +351,7 @@ CFArrayRef sc_SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef pat
             return CFBridgingRetain(filtered);
         }
     }
-    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled && r && pattern) {
+    if (SCShouldHideProxyForCurrentCaller() && r && pattern) {
         NSString *p = (__bridge NSString *)pattern;
         if ([p containsString:@"Proxy"] || [p containsString:@"proxy"]) {
             CFRelease(r);

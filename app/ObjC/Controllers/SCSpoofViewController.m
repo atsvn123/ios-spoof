@@ -196,7 +196,7 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     switch (s) {
         case 0: return self.config.networkMode == 2 ? @"Cellular: app thấy 4G/5G thay WiFi." : @"WiFi: app thấy đang dùng WiFi (có thể spoof SSID).";
-        case 1: return @"Global proxy: thao tác này sẽ redirect toan bo traffic tren may ban toi SOCKS5/HTTP proxy he thong. Geo từ IP sẽ lấy theo IP proxy nếu daemon đang chạy.";
+        case 1: return @"Stealth global proxy: thao tác này sẽ redirect toan bo traffic tren may ban toi SOCKS5/HTTP proxy bang transparent tunnel. App muc tieu se khong thay proxy setting he thong neu hook hoat dong dung.";
         case 2: return self.config.geoFromIP ? @"Đang lấy vị trí từ IP. Nhập thủ công đã tắt." : @"Nhập tọa độ thủ công hoặc tìm kiếm địa điểm.";
         case 3: return @"Chọn preset hoặc nhập thủ công.";
         default: return @"";

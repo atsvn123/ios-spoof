@@ -282,6 +282,7 @@ static BOOL sc_system_proxy_clear(void) {
     return ok;
 }
 
+
 // ---------------------------------------------------------------------------
 //  SOCKS5 client - TCP connect
 // ---------------------------------------------------------------------------
@@ -841,7 +842,7 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
         g_state.running = YES;
         sc_pf_clear();
         BOOL ok = sc_system_proxy_apply();
-        sc_log(@"system proxy apply: %@ %s:%u", strcmp(g_state.proxyType, "http") == 0 ? @"http" : @"socks5", g_state.host, g_state.port);
+        sc_log(@"compat stealth proxy started: %@ %s:%u (API-hidden to apps)", strcmp(g_state.proxyType, "http") == 0 ? @"http" : @"socks5", g_state.host, g_state.port);
         return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(ok)} options:0 error:nil];
     }
     if ([c isEqualToString:@"stop"]) {

@@ -37,6 +37,7 @@
 #import <pthread.h>
 #import <signal.h>
 #import <dispatch/dispatch.h>
+#import <dlfcn.h>
 #import <string.h>
 #import <spawn.h>
 

@@ -39,6 +39,7 @@
 @property (nonatomic, readonly) NSString *carrierMNC;
 @property (nonatomic, readonly) NSString *carrierISO;
 @property (nonatomic, readonly) NSString *radioTech;
+@property (nonatomic, readonly) NSArray<NSDictionary *> *simSlots;
 @property (nonatomic, readonly) BOOL geoEnabled;
 @property (nonatomic, readonly) double latitude;
 @property (nonatomic, readonly) double longitude;

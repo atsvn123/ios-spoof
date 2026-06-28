@@ -130,7 +130,7 @@
         case 0: return self.config.networkMode == 2 ? 2 : 4;
         case 1: return self.config.proxyEnabled ? 7 : 2;
         case 2: return [self gpsRowCount];
-        case 3: return 1 + 5;
+        case 3: return 1 + 5 + 10;
         case 4: return 5;
         case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
         case 6: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
@@ -163,7 +163,7 @@
         case 0: return [self networkModeCell:i];
         case 1: return [self proxyCell:i];
         case 2: return [self gpsCell:i];
-        case 3: return i.row == 0 ? [self carrierPresetCell] : [self carrierCell:i];
+        case 3: return i.row <= 5 ? (i.row == 0 ? [self carrierPresetCell] : [self carrierCell:i]) : [self simCell:i];
         case 4: return [self antiDetectCell:i];
         case 5: return [self systemCell:i];
         case 6: return [self bluetoothCell:i];
@@ -321,6 +321,31 @@
     NSArray *vals = @[self.config.carrierName ?: @"", self.config.carrierMCC ?: @"", self.config.carrierMNC ?: @"", self.config.carrierISO ?: @"", self.config.radioTech ?: @""];
     UITableViewCell *c = [self cellWithTitle:titles[i.row-1] detail:nil];
     c.accessoryView = [self textFieldWithText:vals[i.row-1] placeholder:@"" tag:800+i.row keyboard:(i.row==1||i.row==2)?UIKeyboardTypeNumberPad:UIKeyboardTypeDefault];
+    return c;
+}
+
+- (UITableViewCell *)simCell:(NSIndexPath *)i {
+    NSInteger idx = (i.row - 6) / 5;
+    NSInteger field = (i.row - 6) % 5;
+    NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
+    while (slots.count < 2) [slots addObject:@{}];
+    NSDictionary *sim = slots[idx];
+    NSArray *titles = @[
+        [NSString stringWithFormat:@"Sim %ld Phone", (long)idx + 1],
+        [NSString stringWithFormat:@"Sim %ld Carrier", (long)idx + 1],
+        [NSString stringWithFormat:@"Sim %ld MCC", (long)idx + 1],
+        [NSString stringWithFormat:@"Sim %ld MNC", (long)idx + 1],
+        [NSString stringWithFormat:@"Sim %ld eSIM", (long)idx + 1]
+    ];
+    if (field == 4) {
+        UITableViewCell *c = [self switchCellWithTitle:titles[field] on:[sim[@"eSIM"] boolValue] action:@selector(toggleSimESIM:)];
+        ((UISwitch *)c.accessoryView).tag = 880 + idx;
+        return c;
+    }
+    NSArray *keys = @[@"phoneNumber", @"carrierName", @"carrierMCC", @"carrierMNC"];
+    NSString *text = [sim[keys[field]] description] ?: @"";
+    UITableViewCell *c = [self cellWithTitle:titles[field] detail:nil];
+    c.accessoryView = [self textFieldWithText:text placeholder:@"" tag:810 + idx * 10 + field keyboard:(field==2||field==3||field==0)?UIKeyboardTypePhonePad:UIKeyboardTypeDefault];
     return c;
 }
 
@@ -774,6 +799,18 @@
     [self.config save];
 }
 
+- (void)toggleSimESIM:(UISwitch *)s {
+    NSInteger idx = s.tag - 880;
+    NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
+    while (slots.count < 2) [slots addObject:@{}];
+    NSMutableDictionary *sim = [NSMutableDictionary dictionaryWithDictionary:slots[idx]];
+    sim[@"eSIM"] = @(s.on);
+    sim[@"enabled"] = @YES;
+    slots[idx] = sim;
+    self.config.simSlots = slots;
+    [self.config save];
+}
+
 - (void)saveAndReload {
     for (UITableViewCell *c in self.tableView.visibleCells) {
         if ([c.accessoryView isKindOfClass:UITextField.class]) {
@@ -782,7 +819,23 @@
                 case 5: if (t.tag==500) self.config.wifiSSID=t.text; break;
                 case 6: if (t.tag==601) self.config.proxyType=t.text; if (t.tag==602) self.config.proxyHost=t.text; if (t.tag==603) self.config.proxyPort=t.text.integerValue; if (t.tag==604) self.config.proxyUser=t.text; if (t.tag==605) self.config.proxyPass=t.text; break;
                 case 7: if (t.tag==702) self.config.latitude=t.text.doubleValue; if (t.tag==703) self.config.longitude=t.text.doubleValue; if (t.tag==704) self.config.altitude=t.text.doubleValue; if (t.tag==705) self.config.horizontalAccuracy=t.text.doubleValue; if (t.tag==706) self.config.heading=t.text.doubleValue; break;
-                case 8: if (t.tag==800) self.config.carrierName=t.text; if (t.tag==801) self.config.carrierMCC=t.text; if (t.tag==802) self.config.carrierMNC=t.text; if (t.tag==803) self.config.carrierISO=t.text; if (t.tag==804) self.config.radioTech=t.text; break;
+                case 8:
+                    if (t.tag==800) self.config.carrierName=t.text; if (t.tag==801) self.config.carrierMCC=t.text; if (t.tag==802) self.config.carrierMNC=t.text; if (t.tag==803) self.config.carrierISO=t.text; if (t.tag==804) self.config.radioTech=t.text;
+                    if (t.tag >= 810 && t.tag < 830) {
+                        NSInteger idx = (t.tag - 810) / 10;
+                        NSInteger field = (t.tag - 810) % 10;
+                        NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
+                        while (slots.count < 2) [slots addObject:@{}];
+                        NSMutableDictionary *sim = [NSMutableDictionary dictionaryWithDictionary:slots[idx]];
+                        NSArray *keys = @[@"phoneNumber", @"carrierName", @"carrierMCC", @"carrierMNC"];
+                        if (field < (NSInteger)keys.count) sim[keys[field]] = t.text ?: @"";
+                        sim[@"enabled"] = @YES;
+                        if (!sim[@"carrierISO"]) sim[@"carrierISO"] = self.config.carrierISO ?: @"vn";
+                        if (!sim[@"radioTech"]) sim[@"radioTech"] = self.config.radioTech ?: @"CTRadioAccessTechnologyLTE";
+                        slots[idx] = sim;
+                        self.config.simSlots = slots;
+                    }
+                    break;
                 case 10: if (t.tag==1000) self.config.bluetoothMAC=t.text; if (t.tag==1001) self.config.bluetoothDeviceName=t.text; break;
             }
         }

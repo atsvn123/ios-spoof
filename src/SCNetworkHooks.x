@@ -68,6 +68,26 @@ static BOOL SCIsCellularInterfaceName(const char *name) {
     return name && (!strncmp(name, "pdp_ip", 6) || !strncmp(name, "ipsec", 5));
 }
 
+static NSArray<NSDictionary *> *SCEnabledSIMSlots(void) {
+    NSMutableArray *slots = [NSMutableArray array];
+    for (NSDictionary *sim in CFG().simSlots ?: @[]) {
+        if (![sim isKindOfClass:NSDictionary.class]) continue;
+        if (sim[@"enabled"] && ![sim[@"enabled"] boolValue]) continue;
+        [slots addObject:sim];
+    }
+    if (slots.count == 0 && P()) {
+        [slots addObject:@{@"carrierName":P().carrierName ?: @"carrier", @"carrierMCC":P().carrierMCC ?: @"", @"carrierMNC":P().carrierMNC ?: @"", @"carrierISO":P().carrierISO ?: @"vn", @"radioTech":P().radioTech ?: @"CTRadioAccessTechnologyLTE", @"phoneNumber":@"", @"eSIM":@NO}];
+    }
+    return slots;
+}
+
+static const void *SCSIMInfoKey = &SCSIMInfoKey;
+
+static NSDictionary *SCSIMInfoForCarrier(id carrier) {
+    NSDictionary *info = objc_getAssociatedObject(carrier, SCSIMInfoKey);
+    return [info isKindOfClass:NSDictionary.class] ? info : nil;
+}
+
 static NSDictionary *SCCellularIPv4Dictionary(void) {
     NSString *serviceID = CFG().cellularServiceID.length ? CFG().cellularServiceID : @"00000000-0000-0000-0000-000000000000";
     NSString *address = CFG().cellularIPv4.length ? CFG().cellularIPv4 : @"10.23.42.10";
@@ -110,18 +130,29 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 
 %hook CTCarrier
 - (NSString *)carrierName {
+    NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (SC_ON() && sim) return sim[@"carrierName"] ?: @"carrier";
     if (SC_ON() && P()) return P().carrierName ?: @"carrier";
     return %orig;
 }
 - (NSString *)mobileCountryCode {
+    NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (SC_ON() && sim) return sim[@"carrierMCC"] ?: @"";
     if (SC_ON() && P()) return P().carrierMCC ?: @"";
     return %orig;
 }
 - (NSString *)mobileNetworkCode {
+    NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (SC_ON() && sim) return sim[@"carrierMNC"] ?: @"";
     if (SC_ON() && P()) return P().carrierMNC ?: @"";
     return %orig;
 }
 - (NSString *)isoCountryCode {
+    NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (SC_ON() && sim) {
+        NSString *iso = sim[@"carrierISO"] ?: @"vn";
+        return iso.uppercaseString;
+    }
     if (SC_ON() && P()) return (P().carrierISO ?: @"vn").uppercaseString;
     return %orig;
 }
@@ -139,17 +170,12 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 - (NSDictionary<NSString *, CTCarrier *> *)serviceSubscriberCellularProviders {
     NSDictionary *orig = %orig;
     if (!SC_ON() || !P()) return orig;
-    // Trả về dict đã modify carrier
-    NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:orig];
-    for (NSString *key in m.allKeys) {
-        // CTCarrier immutable -> hook method trả spoof, không cần thay object
-        // nhưng đảm bảo key tồn tại
-        (void)key;
-    }
-    if (m.count == 0) {
-        // Tạo carrier giả nếu rỗng
+    NSMutableDictionary *m = [NSMutableDictionary dictionary];
+    NSArray *slots = SCEnabledSIMSlots();
+    for (NSUInteger idx = 0; idx < slots.count && idx < 2; idx++) {
         CTCarrier *c = [CTCarrier new];
-        m[@"kCTCarrierSlot1"] = c;
+        objc_setAssociatedObject(c, SCSIMInfoKey, slots[idx], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        m[[NSString stringWithFormat:@"kCTCarrierSlot%lu", (unsigned long)idx + 1]] = c;
     }
     return m.copy;
 }
@@ -161,14 +187,16 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 - (NSDictionary<NSString *, NSString *> *)serviceCurrentRadioAccessTechnology {
     NSDictionary *orig = %orig;
     if (!SC_ON() || !P()) return orig;
-    if (orig.count == 0) return @{ @"kCTRadioAccessTechnologySlot1": P().radioTech };
-    // Modify value
     NSMutableDictionary *m = [NSMutableDictionary dictionary];
-    for (NSString *k in orig) m[k] = P().radioTech ?: @"CTRadioAccessTechnologyLTE";
+    NSArray *slots = SCEnabledSIMSlots();
+    for (NSUInteger idx = 0; idx < slots.count && idx < 2; idx++) {
+        NSDictionary *sim = slots[idx];
+        m[[NSString stringWithFormat:@"kCTRadioAccessTechnologySlot%lu", (unsigned long)idx + 1]] = sim[@"radioTech"] ?: P().radioTech ?: @"CTRadioAccessTechnologyLTE";
+    }
     return m.copy;
 }
 - (NSString *)dataServiceIdentifier {
-    if (SC_ON() && P()) return @"0000000100000001";
+    if (SC_ON() && P()) return @"kCTCarrierSlot1";
     return %orig;
 }
 %end
@@ -635,6 +663,50 @@ static void SCHookNetworkCAPIIfLoaded(void) {
     if (sym) MSHookFunction(sym, (void *)sc_nw_interface_get_name, (void **)&orig_nw_interface_get_name);
 }
 
+// Private CoreTelephony best-effort hooks. Hook only existing selectors/classes.
+static id (*orig_CTPrivate_string)(id, SEL);
+static id sc_CTPrivate_phoneNumber(id self, SEL _cmd) {
+    NSDictionary *sim = (SCEnabledSIMSlots().count > 0) ? SCEnabledSIMSlots()[0] : nil;
+    if (SC_ON() && sim[@"phoneNumber"]) return sim[@"phoneNumber"];
+    return nil;
+}
+
+static id sc_CTPrivate_uuid(id self, SEL _cmd) {
+    if (SC_ON()) return CFG().cellularServiceID ?: [[NSUUID UUID] UUIDString];
+    return nil;
+}
+
+static BOOL (*orig_CTPrivate_bool)(id, SEL);
+static BOOL sc_CTPrivate_isEmbeddedSIM(id self, SEL _cmd) {
+    NSArray *slots = SCEnabledSIMSlots();
+    if (SC_ON() && slots.count > 0) return [slots[0][@"eSIM"] boolValue];
+    return NO;
+}
+
+static BOOL sc_CTPrivate_isSimPresent(id self, SEL _cmd) {
+    if (SC_ON()) return SCEnabledSIMSlots().count > 0;
+    return NO;
+}
+
+static void SCHookPrivateCoreTelephonyIfLoaded(void) {
+    NSArray *classes = @[@"CTSubscriber", @"CTSubscription", @"CTSubscriptionContext", @"CTSIMSupport"];
+    for (NSString *name in classes) {
+        Class cls = objc_getClass(name.UTF8String);
+        if (!cls) continue;
+        NSArray *stringSelectors = @[@"phoneNumber", @"mobileNumber", @"msisdn", @"uuid", @"identifier", @"subscriptionIdentifier", @"labelID", @"label"];
+        for (NSString *selName in stringSelectors) {
+            SEL sel = NSSelectorFromString(selName);
+            if (!class_getInstanceMethod(cls, sel)) continue;
+            IMP imp = [selName.lowercaseString containsString:@"uuid"] || [selName.lowercaseString containsString:@"identifier"] || [selName.lowercaseString containsString:@"label"] ? (IMP)sc_CTPrivate_uuid : (IMP)sc_CTPrivate_phoneNumber;
+            MSHookMessageEx(cls, sel, imp, (IMP *)&orig_CTPrivate_string);
+        }
+        SEL esim = NSSelectorFromString(@"isEmbeddedSIM");
+        if (class_getInstanceMethod(cls, esim)) MSHookMessageEx(cls, esim, (IMP)sc_CTPrivate_isEmbeddedSIM, (IMP *)&orig_CTPrivate_bool);
+        SEL present = NSSelectorFromString(@"isSimPresent");
+        if (class_getInstanceMethod(cls, present)) MSHookMessageEx(cls, present, (IMP)sc_CTPrivate_isSimPresent, (IMP *)&orig_CTPrivate_bool);
+    }
+}
+
 // ============================================================================
 //  7. res_query / DNS - tránh leak (DNS resolve vẫn hoạt động nhưng không lộ proxy)
 //    DNS leak chủ yếu qua getaddrinfo -> hook để không trả về interface VPN.
@@ -707,5 +779,6 @@ static void SCHookNetworkCAPIIfLoaded(void) {
         SCHookNEHotspotNetworkIfLoaded();
         SCHookNWPathIfLoaded();
         SCHookNetworkCAPIIfLoaded();
+        SCHookPrivateCoreTelephonyIfLoaded();
     }
 }

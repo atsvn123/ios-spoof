@@ -14,6 +14,7 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic, copy) NSString *carrierMNC;
 @property (nonatomic, copy) NSString *carrierISO;
 @property (nonatomic, copy) NSString *radioTech;
+@property (nonatomic, copy) NSArray<NSDictionary *> *simSlots;
 
 @property (nonatomic) BOOL geoEnabled;
 @property (nonatomic) double latitude;

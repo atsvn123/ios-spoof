@@ -28,6 +28,23 @@
 #import <substrate.h>
 #import <IOKit/IOKitLib.h>
 
+@class WKWebViewConfiguration;
+@class WKUserContentController;
+
+@interface WKWebView : UIView
+@property (nonatomic, copy) NSString *customUserAgent;
+- (instancetype)initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration;
+@end
+
+@interface WKWebViewConfiguration : NSObject
+@property (nonatomic, strong) WKUserContentController *userContentController;
+@property (nonatomic, copy) NSString *applicationNameForUserAgent;
+@end
+
+@interface WKUserContentController : NSObject
+- (void)addUserScript:(id)userScript;
+@end
+
 #ifndef HW_MEMSIZE
 #define HW_MEMSIZE 24
 #endif
@@ -1148,6 +1165,151 @@ static NSSet *sc_protected_bundles(void) {
     return s;
 }
 
+// ============================================================================
+// WebKit / WKWebView fingerprint surface
+// ============================================================================
+
+static NSString *SCWebKitUserAgent(void) {
+    NSString *version = CFG().systemVersion.length ? CFG().systemVersion : @"17_5";
+    version = [version stringByReplacingOccurrencesOfString:@"." withString:@"_"];
+    return [NSString stringWithFormat:@"Mozilla/5.0 (iPhone; CPU iPhone OS %@ like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148", version];
+}
+
+static NSString *SCWebKitSpoofScript(void) {
+    CGFloat scale = MAX((CGFloat)P().screenScale, 1.0);
+    NSInteger width = P().screenWidth / scale;
+    NSInteger height = P().screenHeight / scale;
+    NSString *locale = CFG().localeIdentifier.length ? [CFG().localeIdentifier stringByReplacingOccurrencesOfString:@"_" withString:@"-"] : @"en-US";
+    NSString *tz = CFG().timezoneIdentifier.length ? CFG().timezoneIdentifier : @"UTC";
+    NSString *platform = @"iPhone";
+    NSString *ua = SCWebKitUserAgent();
+    return [NSString stringWithFormat:
+        @"(()=>{const def=(o,k,v)=>{try{Object.defineProperty(o,k,{get:()=>v,configurable:true});}catch(e){}};"
+         "def(navigator,'userAgent','%@');def(navigator,'platform','%@');def(navigator,'language','%@');def(navigator,'languages',['%@','en-US','en']);"
+         "def(navigator,'hardwareConcurrency',6);def(navigator,'maxTouchPoints',5);"
+         "def(screen,'width',%ld);def(screen,'height',%ld);def(screen,'availWidth',%ld);def(screen,'availHeight',%ld);def(window,'devicePixelRatio',%.1f);"
+         "const ro=Intl.DateTimeFormat.prototype.resolvedOptions;Intl.DateTimeFormat.prototype.resolvedOptions=function(){const r=ro.call(this);r.timeZone='%@';r.locale='%@';return r;};"
+         "if(navigator.mediaDevices){navigator.mediaDevices.enumerateDevices=()=>Promise.resolve([]);}"
+         "})();", ua, platform, locale, locale, (long)width, (long)height, (long)width, (long)height, scale, tz, locale];
+}
+
+static void SCInjectWebKitScript(WKWebViewConfiguration *configuration) {
+    if (!SC_ON() || !P() || !configuration) return;
+    Class scriptClass = NSClassFromString(@"WKUserScript");
+    Class controllerClass = NSClassFromString(@"WKUserContentController");
+    if (!scriptClass || !controllerClass) return;
+    if (!configuration.userContentController) configuration.userContentController = [controllerClass new];
+    SEL initSel = NSSelectorFromString(@"initWithSource:injectionTime:forMainFrameOnly:");
+    if (![scriptClass instancesRespondToSelector:initSel]) return;
+    id script = ((id (*)(id, SEL, NSString *, NSInteger, BOOL))objc_msgSend)([scriptClass alloc], initSel, SCWebKitSpoofScript(), 0, NO);
+    [configuration.userContentController addUserScript:script];
+    configuration.applicationNameForUserAgent = @"Mobile/15E148";
+}
+
+%hook WKWebView
+- (instancetype)initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration {
+    SCInjectWebKitScript(configuration);
+    WKWebView *webView = %orig(frame, configuration);
+    if (SC_ON() && P()) webView.customUserAgent = SCWebKitUserAgent();
+    return webView;
+}
+- (void)setCustomUserAgent:(NSString *)customUserAgent {
+    if (SC_ON() && P()) { %orig(SCWebKitUserAgent()); return; }
+    %orig;
+}
+- (NSString *)customUserAgent {
+    if (SC_ON() && P()) return SCWebKitUserAgent();
+    return %orig;
+}
+%end
+
+// ============================================================================
+// MobileGestalt — private Apple source for Settings/About and many capabilities
+// ============================================================================
+
+static CFTypeRef (*orig_MGCopyAnswer)(CFStringRef key);
+static CFDictionaryRef (*orig_MGCopyMultipleAnswers)(CFArrayRef keys, CFDictionaryRef options);
+
+static CFTypeRef SCCopyMobileGestaltAnswer(CFStringRef key) {
+    if (!SC_ON() || !P() || !key) return NULL;
+    NSString *k = (__bridge NSString *)key;
+    NSDictionary *p = @{
+        @"ProductType": P().productType ?: @"iPhone14,5",
+        @"ProductName": P().marketingName ?: @"iPhone",
+        @"MarketingName": P().marketingName ?: @"iPhone",
+        @"HWModelStr": P().hardwareModel ?: @"D63AP",
+        @"HardwareModel": P().hardwareModel ?: @"D63AP",
+        @"DeviceClass": @"iPhone",
+        @"DeviceVariant": @"A",
+        @"ModelNumber": P().modelNumber ?: @"MLNG3LL/A",
+        @"BoardId": P().boardId ?: @"0x08",
+        @"ChipID": P().chipId ?: @"t8110",
+        @"HardwarePlatform": P().hardwareModel ?: @"D63AP",
+        @"ArtworkDeviceSubType": @(P().screenHeight >= 2688 ? 2436 : 1792),
+        @"DeviceSubType": @(P().screenHeight >= 2688 ? 2436 : 1792),
+        @"BuildVersion": CFG().buildID ?: @"21F90",
+        @"ProductVersion": CFG().systemVersion ?: @"17.5",
+        @"ReleaseType": @"User",
+        @"UniqueDeviceID": CFG().spoofedUDID ?: @"",
+        @"SerialNumber": CFG().spoofedSerial ?: @"",
+        @"MLBSerialNumber": CFG().spoofedSerial ?: @"",
+        @"UniqueChipID": CFG().spoofedECID ?: @"",
+        @"DieID": CFG().spoofedECID ?: @"",
+        @"InternationalMobileEquipmentIdentity": CFG().spoofedIMEI ?: @"",
+        @"InternationalMobileEquipmentIdentity2": CFG().simSlots.count > 1 ? CFG().spoofedIMEI ?: @"" : @"",
+        @"BasebandVersion": @"5.00.00",
+        @"BasebandChipID": @"0x00000001",
+        @"BasebandCertId": @"0x00000001",
+        @"FirmwareVersion": CFG().buildID ?: @"21F90",
+        @"WifiAddress": CFG().spoofedMAC ?: @"",
+        @"BluetoothAddress": CFG().bluetoothMAC.length ? CFG().bluetoothMAC : (CFG().spoofedMAC ?: @""),
+        @"RegionCode": CFG().carrierISO.length ? CFG().carrierISO.uppercaseString : @"US",
+        @"RegionInfo": CFG().carrierISO.length ? CFG().carrierISO.uppercaseString : @"US",
+        @"HasBaseband": @YES,
+        @"HasCellularCapability": @YES,
+        @"HasTelephonyCapability": @YES,
+        @"SupportsDualSIM": @(CFG().simSlots.count > 1),
+        @"SupportsESIM": @YES,
+        @"n78aHack": @YES,
+    };
+    id v = p[k];
+    if (!v) return NULL;
+    return CFRetain((__bridge CFTypeRef)v);
+}
+
+static CFTypeRef sc_MGCopyAnswer(CFStringRef key) {
+    CFTypeRef fake = SCCopyMobileGestaltAnswer(key);
+    if (fake) return fake;
+    return orig_MGCopyAnswer ? orig_MGCopyAnswer(key) : NULL;
+}
+
+static CFDictionaryRef sc_MGCopyMultipleAnswers(CFArrayRef keys, CFDictionaryRef options) {
+    CFDictionaryRef orig = orig_MGCopyMultipleAnswers ? orig_MGCopyMultipleAnswers(keys, options) : NULL;
+    NSMutableDictionary *m = orig ? [(__bridge NSDictionary *)orig mutableCopy] : [NSMutableDictionary dictionary];
+    if (orig) CFRelease(orig);
+    if (SC_ON() && keys) {
+        for (id keyObj in (__bridge NSArray *)keys) {
+            if (![keyObj isKindOfClass:NSString.class]) continue;
+            CFTypeRef fake = SCCopyMobileGestaltAnswer((__bridge CFStringRef)keyObj);
+            if (fake) {
+                m[keyObj] = CFBridgingRelease(fake);
+            }
+        }
+    }
+    return CFBridgingRetain(m);
+}
+
+static void SCInstallMobileGestaltHooks(void) {
+    void *mg = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_NOW);
+    if (!mg) mg = dlopen("/System/Library/PrivateFrameworks/MobileGestalt.framework/MobileGestalt", RTLD_NOW);
+    if (!mg) return;
+
+    void *copyAnswer = dlsym(mg, "MGCopyAnswer");
+    if (copyAnswer) MSHookFunction(copyAnswer, (void *)sc_MGCopyAnswer, (void **)&orig_MGCopyAnswer);
+    void *copyMultiple = dlsym(mg, "MGCopyMultipleAnswers");
+    if (copyMultiple) MSHookFunction(copyMultiple, (void *)sc_MGCopyMultipleAnswers, (void **)&orig_MGCopyMultipleAnswers);
+}
+
 %ctor {
     @autoreleasepool {
         // Đọc bundle ID sớm, không khởi tạo toàn bộ SCSpoofConfig
@@ -1220,6 +1382,7 @@ static NSSet *sc_protected_bundles(void) {
             MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
             MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
             MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
+            SCInstallMobileGestaltHooks();
 
             // User-space mode intentionally avoids high-risk anti-debug/process hooks
             // (getenv, dlopen, fork, task_for_pid, csops, dyld, proc, posix_spawn).

@@ -11,6 +11,13 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
     return [NSString stringWithFormat:@"10.%u.%u.%ld", arc4random_uniform(200) + 20, arc4random_uniform(250) + 1, (long)base];
 }
 
+static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc, NSString *mnc, NSString *iso, NSString *radio, NSString *phone) {
+    return @[
+        @{@"enabled":@YES, @"label":@"Sim 1", @"carrierName":name ?: @"Viettel", @"carrierMCC":mcc ?: @"452", @"carrierMNC":mnc ?: @"04", @"carrierISO":iso ?: @"vn", @"radioTech":radio ?: @"CTRadioAccessTechnologyLTE", @"phoneNumber":phone ?: @"", @"eSIM":@NO},
+        @{@"enabled":@NO, @"label":@"Sim 2", @"carrierName":@"Mobifone", @"carrierMCC":@"452", @"carrierMNC":@"01", @"carrierISO":@"vn", @"radioTech":@"CTRadioAccessTechnologyLTE", @"phoneNumber":@"", @"eSIM":@YES}
+    ];
+}
+
 @implementation SCAppConfig
 
 + (BOOL)systemhookInstalled {
@@ -86,6 +93,7 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
     self.carrierMNC = d[@"carrierMNC"] ?: @"04";
     self.carrierISO = d[@"carrierISO"] ?: @"vn";
     self.radioTech = d[@"radioTech"] ?: @"CTRadioAccessTechnologyLTE";
+    self.simSlots = [d[@"simSlots"] isKindOfClass:NSArray.class] ? d[@"simSlots"] : SCDefaultSIMSlots(self.carrierName, self.carrierMCC, self.carrierMNC, self.carrierISO, self.radioTech, d[@"phoneNumber"] ?: @"");
     self.geoEnabled = [d[@"geoEnabled"] boolValue];
     self.latitude = d[@"latitude"] ? [d[@"latitude"] doubleValue] : 21.0285;
     self.longitude = d[@"longitude"] ? [d[@"longitude"] doubleValue] : 105.8542;
@@ -146,6 +154,7 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
     d[@"carrierMNC"] = self.carrierMNC ?: @"";
     d[@"carrierISO"] = self.carrierISO ?: @"";
     d[@"radioTech"] = self.radioTech ?: @"";
+    d[@"simSlots"] = self.simSlots ?: SCDefaultSIMSlots(self.carrierName, self.carrierMCC, self.carrierMNC, self.carrierISO, self.radioTech, self.phoneNumber);
     d[@"geoEnabled"] = @(self.geoEnabled);
     d[@"latitude"] = @(self.latitude);
     d[@"longitude"] = @(self.longitude);
@@ -232,6 +241,7 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
     self.carrierMNC = preset[@"carrierMNC"];
     self.carrierISO = preset[@"carrierISO"];
     self.radioTech = preset[@"radioTech"];
+    self.simSlots = SCDefaultSIMSlots(self.carrierName, self.carrierMCC, self.carrierMNC, self.carrierISO, self.radioTech, self.phoneNumber);
     NSArray *cities = @[
         @[@21.0285, @105.8542], @[@10.8231, @106.6297], @[@16.0471, @108.2068],
         @[@40.7128, @-74.0060], @[@51.5074, @-0.1278], @[@35.6762, @139.6503]

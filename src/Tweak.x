@@ -462,6 +462,12 @@ static int sc_statvfs(const char *path, struct statvfs *buf) {
 
 static UILabel *SCStatusOverlayLabel;
 
+static NSString *SCNativeUserAgent(void) {
+    NSString *version = CFG().systemVersion.length ? CFG().systemVersion : @"17.5";
+    NSString *v = [version stringByReplacingOccurrencesOfString:@"." withString:@"_"];
+    return [NSString stringWithFormat:@"Mozilla/5.0 (iPhone; CPU iPhone OS %@ like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/%@ Mobile/15E148 Safari/604.1", v, version];
+}
+
 static void SCUpdateStatusOverlayText(UIWindow *window) {
     if (!SCStatusOverlayLabel || !window) return;
     CGFloat top = 0;
@@ -523,9 +529,31 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 %hook NSMutableURLRequest
 - (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
     if (SC_ON() && [field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
+        %orig(SCNativeUserAgent(), field);
         return;
     }
     %orig;
+}
+- (void)setAllHTTPHeaderFields:(NSDictionary<NSString *,NSString *> *)headerFields {
+    if (SC_ON()) {
+        NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:headerFields ?: @{}];
+        m[@"User-Agent"] = SCNativeUserAgent();
+        %orig(m);
+        return;
+    }
+    %orig;
+}
+%end
+
+%hook NSURLRequest
+- (NSDictionary<NSString *,NSString *> *)allHTTPHeaderFields {
+    NSDictionary *d = %orig;
+    if (SC_ON()) {
+        NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
+        m[@"User-Agent"] = SCNativeUserAgent();
+        return m;
+    }
+    return d;
 }
 %end
 
@@ -533,7 +561,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 - (NSDictionary *)HTTPAdditionalHeaders {
     NSDictionary *d = %orig;
     if (SC_ON() && CFG().systemVersion) {
-        NSString *ua = [NSString stringWithFormat:@"Mozilla/5.0 (iPhone; CPU iPhone OS %@ like Mac OS X)", CFG().systemVersion];
+        NSString *ua = SCNativeUserAgent();
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
         m[@"User-Agent"] = ua;
         return [m copy];

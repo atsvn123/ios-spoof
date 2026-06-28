@@ -173,7 +173,7 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
         case 0: return self.config.networkMode == 2 ? 2 : 4;
-        case 1: return self.config.proxyEnabled ? 7 : 2;
+        case 1: return self.config.proxyEnabled ? 8 : 3;
         case 2: return [self gpsRowCount];
         case 3: return (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
         case 4: return 5;
@@ -196,7 +196,7 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     switch (s) {
         case 0: return self.config.networkMode == 2 ? @"Cellular: app thấy 4G/5G thay WiFi." : @"WiFi: app thấy đang dùng WiFi (có thể spoof SSID).";
-        case 1: return @"Proxy trong suốt. Geo từ IP sẽ lấy vị trí theo IP proxy.";
+        case 1: return @"Global proxy: thao tác này sẽ redirect toan bo traffic tren may ban toi SOCKS5/HTTP proxy he thong. Geo từ IP sẽ lấy theo IP proxy nếu daemon đang chạy.";
         case 2: return self.config.geoFromIP ? @"Đang lấy vị trí từ IP. Nhập thủ công đã tắt." : @"Nhập tọa độ thủ công hoặc tìm kiếm địa điểm.";
         case 3: return @"Chọn preset hoặc nhập thủ công.";
         default: return @"";
@@ -262,7 +262,14 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
 
 - (UITableViewCell *)proxyCell:(NSIndexPath *)i {
     if (i.row == 0) return [self switchCellWithTitle:@"Bật Proxy" on:self.config.proxyEnabled action:@selector(toggleProxy:)];
-    if (!self.config.proxyEnabled || i.row == 6) {
+    if (i.row == 1) {
+        NSDictionary *status = SCSendProxyCommand(@{ @"cmd": @"status" });
+        NSString *detail = [status[@"running"] boolValue] ? @"Đang chạy" : @"Đã dừng";
+        UITableViewCell *c = [self cellWithTitle:@"Daemon" detail:detail];
+        c.detailTextLabel.textColor = [status[@"running"] boolValue] ? [UIColor systemGreenColor] : [UIColor systemRedColor];
+        return c;
+    }
+    if (!self.config.proxyEnabled || i.row == 7) {
         UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
         c.textLabel.text = @"Check Proxy";
         c.textLabel.textColor = [UIColor systemBlueColor];
@@ -272,8 +279,9 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
     }
     NSArray *titles = @[@"Type", @"Host", @"Port", @"User", @"Password"];
     NSArray *vals = @[self.config.proxyType, self.config.proxyHost, @(self.config.proxyPort).stringValue, self.config.proxyUser, self.config.proxyPass];
-    UITableViewCell *c = [self cellWithTitle:titles[i.row-1] detail:nil];
-    c.accessoryView = [self textFieldWithText:vals[i.row-1] placeholder:@"" tag:600+i.row keyboard:i.row==3?UIKeyboardTypeNumberPad:UIKeyboardTypeDefault];
+    NSInteger field = i.row - 2;
+    UITableViewCell *c = [self cellWithTitle:titles[field] detail:nil];
+    c.accessoryView = [self textFieldWithText:vals[field] placeholder:@"" tag:600+i.row keyboard:i.row==4?UIKeyboardTypeNumberPad:UIKeyboardTypeDefault];
     return c;
 }
 
@@ -411,7 +419,7 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)i {
     [t deselectRowAtIndexPath:i animated:YES];
     [self dismissKeyboard];
-    if (i.section == 1 && (!self.config.proxyEnabled || i.row == 6)) { [self checkProxy]; return; }
+    if (i.section == 1 && (!self.config.proxyEnabled || i.row == 7)) { [self checkProxy]; return; }
     if (i.section == 2 && !self.config.geoFromIP && i.row == 1) {
         SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
         vc.selectionHandler = ^(double latitude, double longitude) {
@@ -643,7 +651,7 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
 #pragma mark - Proxy Check
 
 - (void)checkProxy {
-    NSIndexPath *ip = [NSIndexPath indexPathForRow:(self.config.proxyEnabled ? 6 : 1) inSection:1];
+    NSIndexPath *ip = [NSIndexPath indexPathForRow:(self.config.proxyEnabled ? 7 : 2) inSection:1];
     UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:ip];
     cell.detailTextLabel.text = @"Checking...";
     NSURL *url = [NSURL URLWithString:@"https://ipwho.is/"];
@@ -931,7 +939,7 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
             UITextField *t = (id)c.accessoryView;
             switch (t.tag / 100) {
                 case 5: if (t.tag==500) self.config.wifiSSID=t.text; break;
-                case 6: if (t.tag==601) self.config.proxyType=t.text; if (t.tag==602) self.config.proxyHost=t.text; if (t.tag==603) self.config.proxyPort=t.text.integerValue; if (t.tag==604) self.config.proxyUser=t.text; if (t.tag==605) self.config.proxyPass=t.text; break;
+                case 6: if (t.tag==602) self.config.proxyType=t.text; if (t.tag==603) self.config.proxyHost=t.text; if (t.tag==604) self.config.proxyPort=t.text.integerValue; if (t.tag==605) self.config.proxyUser=t.text; if (t.tag==606) self.config.proxyPass=t.text; break;
                 case 7: if (t.tag==702) self.config.latitude=t.text.doubleValue; if (t.tag==703) self.config.longitude=t.text.doubleValue; if (t.tag==704) self.config.altitude=t.text.doubleValue; if (t.tag==705) self.config.horizontalAccuracy=t.text.doubleValue; if (t.tag==706) self.config.heading=t.text.doubleValue; break;
                 case 8:
                     if (t.tag==800) self.config.carrierName=t.text; if (t.tag==801) self.config.carrierMCC=t.text; if (t.tag==802) self.config.carrierMNC=t.text; if (t.tag==803) self.config.carrierISO=t.text; if (t.tag==804) self.config.radioTech=t.text;

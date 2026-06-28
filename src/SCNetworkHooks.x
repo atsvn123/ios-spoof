@@ -247,7 +247,7 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 CFDictionaryRef (*orig_CFNetworkCopySystemProxySettings)(void);
 CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
     CFDictionaryRef r = orig_CFNetworkCopySystemProxySettings();
-    if (SC_ON() && CFG().hideProxy) {
+    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled) {
         // Trả về dict rỗng (no proxy) để app không thấy HTTP proxy
         if (r) CFRelease(r);
         return CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
@@ -257,7 +257,7 @@ CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
 
 CFArrayRef (*orig_CFNetworkCopyProxiesForURL)(CFURLRef, CFDictionaryRef);
 CFArrayRef sc_CFNetworkCopyProxiesForURL(CFURLRef url, CFDictionaryRef settings) {
-    if (SC_ON() && CFG().hideProxy) {
+    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled) {
         // Trả về empty array -> không proxy
         return CFArrayCreate(NULL, NULL, 0, NULL);
     }
@@ -297,7 +297,7 @@ CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRe
         }
     }
 
-    if (SC_ON() && CFG().hideProxy && key) {
+    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled && key) {
         NSString *k = (__bridge NSString *)key;
         // ẩn HTTP proxy, HTTPS proxy, SOCKS, auto proxy
         if ([k containsString:@"Proxy"] || [k containsString:@"proxy"] ||
@@ -336,7 +336,7 @@ CFArrayRef sc_SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef pat
             return CFBridgingRetain(filtered);
         }
     }
-    if (SC_ON() && CFG().hideProxy && r && pattern) {
+    if (SC_ON() && CFG().hideProxy && !CFG().proxyEnabled && r && pattern) {
         NSString *p = (__bridge NSString *)pattern;
         if ([p containsString:@"Proxy"] || [p containsString:@"proxy"]) {
             CFRelease(r);

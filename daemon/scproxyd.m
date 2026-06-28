@@ -17,6 +17,7 @@
 //   - DNS qua DoH HTTPS 443 (cũng bị divert qua tunnel)
 
 #import <Foundation/Foundation.h>
+#import <SystemConfiguration/SystemConfiguration.h>
 #import <arpa/inet.h>
 #import <netinet/in.h>
 #import <netinet/ip.h>
@@ -230,6 +231,55 @@ static BOOL sc_pf_clear(void) {
     int rc = sc_spawn_wait(args[0], args);
     sc_log(@"PF rules cleared (rc=%d)", rc);
     return rc == 0;
+}
+
+static BOOL sc_system_proxy_apply(void) {
+    SCPreferencesRef prefs = SCPreferencesCreate(NULL, CFSTR("com.iosspoof.scproxyd"), NULL);
+    if (!prefs) return NO;
+    NSDictionary *services = CFBridgingRelease(SCPreferencesGetValue(prefs, CFSTR("NetworkServices")) ? CFRetain(SCPreferencesGetValue(prefs, CFSTR("NetworkServices"))) : NULL);
+    if (![services isKindOfClass:NSDictionary.class]) { CFRelease(prefs); return NO; }
+
+    for (NSString *serviceID in services) {
+        NSString *path = [NSString stringWithFormat:@"/NetworkServices/%@/Proxies", serviceID];
+        NSDictionary *existing = CFBridgingRelease(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path) ? CFRetain(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path)) : NULL);
+        NSMutableDictionary *proxies = [NSMutableDictionary dictionaryWithDictionary:existing ?: @{}];
+        [proxies removeObjectsForKeys:@[@"HTTPEnable", @"HTTPProxy", @"HTTPPort", @"HTTPSEnable", @"HTTPSProxy", @"HTTPSPort", @"SOCKSEnable", @"SOCKSProxy", @"SOCKSPort", @"SOCKSUser", @"SOCKSPassword"]];
+        if (strcmp(g_state.proxyType, "http") == 0) {
+            proxies[@"HTTPEnable"] = @1;
+            proxies[@"HTTPProxy"] = @(g_state.host);
+            proxies[@"HTTPPort"] = @(g_state.port);
+            proxies[@"HTTPSEnable"] = @1;
+            proxies[@"HTTPSProxy"] = @(g_state.host);
+            proxies[@"HTTPSPort"] = @(g_state.port);
+        } else {
+            proxies[@"SOCKSEnable"] = @1;
+            proxies[@"SOCKSProxy"] = @(g_state.host);
+            proxies[@"SOCKSPort"] = @(g_state.port);
+            if (g_state.user[0]) proxies[@"SOCKSUser"] = @(g_state.user);
+            if (g_state.pass[0]) proxies[@"SOCKSPassword"] = @(g_state.pass);
+        }
+        SCPreferencesPathSetValue(prefs, (__bridge CFStringRef)path, (__bridge CFDictionaryRef)proxies);
+    }
+    BOOL ok = SCPreferencesCommitChanges(prefs) && SCPreferencesApplyChanges(prefs);
+    CFRelease(prefs);
+    return ok;
+}
+
+static BOOL sc_system_proxy_clear(void) {
+    SCPreferencesRef prefs = SCPreferencesCreate(NULL, CFSTR("com.iosspoof.scproxyd"), NULL);
+    if (!prefs) return NO;
+    NSDictionary *services = CFBridgingRelease(SCPreferencesGetValue(prefs, CFSTR("NetworkServices")) ? CFRetain(SCPreferencesGetValue(prefs, CFSTR("NetworkServices"))) : NULL);
+    if (![services isKindOfClass:NSDictionary.class]) { CFRelease(prefs); return NO; }
+    for (NSString *serviceID in services) {
+        NSString *path = [NSString stringWithFormat:@"/NetworkServices/%@/Proxies", serviceID];
+        NSDictionary *existing = CFBridgingRelease(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path) ? CFRetain(SCPreferencesPathGetValue(prefs, (__bridge CFStringRef)path)) : NULL);
+        NSMutableDictionary *proxies = [NSMutableDictionary dictionaryWithDictionary:existing ?: @{}];
+        [proxies removeObjectsForKeys:@[@"HTTPEnable", @"HTTPProxy", @"HTTPPort", @"HTTPSEnable", @"HTTPSProxy", @"HTTPSPort", @"SOCKSEnable", @"SOCKSProxy", @"SOCKSPort", @"SOCKSUser", @"SOCKSPassword"]];
+        SCPreferencesPathSetValue(prefs, (__bridge CFStringRef)path, (__bridge CFDictionaryRef)proxies);
+    }
+    BOOL ok = SCPreferencesCommitChanges(prefs) && SCPreferencesApplyChanges(prefs);
+    CFRelease(prefs);
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -789,30 +839,14 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
             return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO), @"err":@"no host/port"} options:0 error:nil];
         }
         g_state.running = YES;
-        sc_pf_load();
-        // Start loops
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            sc_divert_sniff_loop();
-        });
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            sc_tcp_listener_loop();
-        });
-        pthread_t doh;
-        pthread_create(&doh, NULL, sc_doh_loop, NULL);
-        // If UDP associate requested
-        if (g_state.udp) {
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                struct sockaddr_in bind;
-                int ufd = sc_socks5_udp_associate(&bind);
-                if (ufd < 0) {
-                    sc_log(@"UDP associate failed, UDP DNS sẽ fallback DoH");
-                }
-            });
-        }
-        return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(YES)} options:0 error:nil];
+        sc_pf_clear();
+        BOOL ok = sc_system_proxy_apply();
+        sc_log(@"system proxy apply: %@ %s:%u", strcmp(g_state.proxyType, "http") == 0 ? @"http" : @"socks5", g_state.host, g_state.port);
+        return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(ok)} options:0 error:nil];
     }
     if ([c isEqualToString:@"stop"]) {
         g_state.running = NO;
+        sc_system_proxy_clear();
         sc_pf_clear();
         if (g_state.divert_fd >= 0) { close(g_state.divert_fd); g_state.divert_fd = -1; }
         if (g_state.udp_fd >= 0) { close(g_state.udp_fd); g_state.udp_fd = -1; }

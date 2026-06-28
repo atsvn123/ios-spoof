@@ -2,6 +2,7 @@
 #import "SCDevicePresets.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <sys/sysctl.h>
 #import <sys/stat.h>
 #import <sys/utsname.h>
@@ -1328,12 +1329,7 @@ static NSSet *sc_protected_bundles(void) {
             @"com.opa334.Dopamine",
             @"com.opa334.TrollStore",
             @"com.opa334.TrollStorePersistenceHelper",
-            @"com.apple.springboard",
-            @"com.apple.Preferences",
-            @"com.apple.mobilesafari",
-            @"com.apple.MobileSMS",
-            @"com.apple.mobilephone",
-            @"com.apple.mobilemail"
+            @"com.apple.springboard"
         ]];
     });
     return s;
@@ -1378,6 +1374,85 @@ static void SCInjectWebKitScript(WKWebViewConfiguration *configuration) {
     id script = ((id (*)(id, SEL, NSString *, NSInteger, BOOL))objc_msgSend)([scriptClass alloc], initSel, SCWebKitSpoofScript(), 0, NO);
     [configuration.userContentController addUserScript:script];
     configuration.applicationNameForUserAgent = @"Mobile/15E148";
+}
+
+static id (*orig_WKWebView_initWithFrame_configuration)(id, SEL, CGRect, WKWebViewConfiguration *);
+static id sc_WKWebView_initWithFrame_configuration(id self, SEL _cmd, CGRect frame, WKWebViewConfiguration *configuration) {
+    SCInjectWebKitScript(configuration);
+    id obj = orig_WKWebView_initWithFrame_configuration ? orig_WKWebView_initWithFrame_configuration(self, _cmd, frame, configuration) : self;
+    if (SC_ON() && [obj respondsToSelector:@selector(setCustomUserAgent:)]) {
+        ((void (*)(id, SEL, NSString *))objc_msgSend)(obj, @selector(setCustomUserAgent:), SCWebKitUserAgent());
+    }
+    return obj;
+}
+
+static void (*orig_WKWebView_setCustomUserAgent)(id, SEL, NSString *);
+static void sc_WKWebView_setCustomUserAgent(id self, SEL _cmd, NSString *ua) {
+    NSString *fake = SC_ON() ? SCWebKitUserAgent() : ua;
+    if (orig_WKWebView_setCustomUserAgent) orig_WKWebView_setCustomUserAgent(self, _cmd, fake);
+}
+
+static NSString *(*orig_WKWebView_customUserAgent)(id, SEL);
+static NSString *sc_WKWebView_customUserAgent(id self, SEL _cmd) {
+    if (SC_ON()) return SCWebKitUserAgent();
+    return orig_WKWebView_customUserAgent ? orig_WKWebView_customUserAgent(self, _cmd) : nil;
+}
+
+static void (*orig_WKWebViewConfiguration_setApplicationNameForUserAgent)(id, SEL, NSString *);
+static void sc_WKWebViewConfiguration_setApplicationNameForUserAgent(id self, SEL _cmd, NSString *name) {
+    NSString *fake = SC_ON() ? @"Mobile/15E148" : name;
+    if (orig_WKWebViewConfiguration_setApplicationNameForUserAgent) orig_WKWebViewConfiguration_setApplicationNameForUserAgent(self, _cmd, fake);
+}
+
+static void (*orig_WKWebViewConfiguration_setUserContentController)(id, SEL, WKUserContentController *);
+static void sc_WKWebViewConfiguration_setUserContentController(id self, SEL _cmd, WKUserContentController *controller) {
+    if (orig_WKWebViewConfiguration_setUserContentController) orig_WKWebViewConfiguration_setUserContentController(self, _cmd, controller);
+    SCInjectWebKitScript((WKWebViewConfiguration *)self);
+}
+
+static NSString *(*orig_SFUserAgent_string)(id, SEL);
+static NSString *sc_SFUserAgent_string(id self, SEL _cmd) {
+    if (SC_ON()) return SCWebKitUserAgent();
+    return orig_SFUserAgent_string ? orig_SFUserAgent_string(self, _cmd) : nil;
+}
+
+static NSString *(*orig_SFUserAgent_domain)(id, SEL, id);
+static NSString *sc_SFUserAgent_domain(id self, SEL _cmd, id domain) {
+    if (SC_ON()) return SCWebKitUserAgent();
+    return orig_SFUserAgent_domain ? orig_SFUserAgent_domain(self, _cmd, domain) : nil;
+}
+
+static void SCInstallWebKitHooks(void) {
+    dlopen("/System/Library/Frameworks/WebKit.framework/WebKit", RTLD_NOW);
+    static BOOL hooked = NO;
+    if (hooked) return;
+    hooked = YES;
+
+    Class webView = objc_getClass("WKWebView");
+    if (webView) {
+        SEL initSel = @selector(initWithFrame:configuration:);
+        if (class_getInstanceMethod(webView, initSel)) MSHookMessageEx(webView, initSel, (IMP)sc_WKWebView_initWithFrame_configuration, (IMP *)&orig_WKWebView_initWithFrame_configuration);
+        SEL setUASel = @selector(setCustomUserAgent:);
+        if (class_getInstanceMethod(webView, setUASel)) MSHookMessageEx(webView, setUASel, (IMP)sc_WKWebView_setCustomUserAgent, (IMP *)&orig_WKWebView_setCustomUserAgent);
+        SEL getUASel = @selector(customUserAgent);
+        if (class_getInstanceMethod(webView, getUASel)) MSHookMessageEx(webView, getUASel, (IMP)sc_WKWebView_customUserAgent, (IMP *)&orig_WKWebView_customUserAgent);
+    }
+
+    Class config = objc_getClass("WKWebViewConfiguration");
+    if (config) {
+        SEL appNameSel = @selector(setApplicationNameForUserAgent:);
+        if (class_getInstanceMethod(config, appNameSel)) MSHookMessageEx(config, appNameSel, (IMP)sc_WKWebViewConfiguration_setApplicationNameForUserAgent, (IMP *)&orig_WKWebViewConfiguration_setApplicationNameForUserAgent);
+        SEL uccSel = @selector(setUserContentController:);
+        if (class_getInstanceMethod(config, uccSel)) MSHookMessageEx(config, uccSel, (IMP)sc_WKWebViewConfiguration_setUserContentController, (IMP *)&orig_WKWebViewConfiguration_setUserContentController);
+    }
+
+    Class sf = objc_getClass("SFUserAgentController");
+    if (sf) {
+        SEL defSel = NSSelectorFromString(@"defaultUserAgentString");
+        if (class_getInstanceMethod(sf, defSel)) MSHookMessageEx(sf, defSel, (IMP)sc_SFUserAgent_string, (IMP *)&orig_SFUserAgent_string);
+        SEL domainSel = NSSelectorFromString(@"userAgentWithDomain:");
+        if (class_getInstanceMethod(sf, domainSel)) MSHookMessageEx(sf, domainSel, (IMP)sc_SFUserAgent_domain, (IMP *)&orig_SFUserAgent_domain);
+    }
 }
 
 // ============================================================================
@@ -1534,6 +1609,7 @@ static void SCInstallMobileGestaltHooks(void) {
             MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
             MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
             MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
+            SCInstallWebKitHooks();
             SCInstallSystemVersionHooks();
             SCInstallMobileGestaltHooks();
 

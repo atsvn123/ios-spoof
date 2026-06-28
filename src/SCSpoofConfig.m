@@ -218,19 +218,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
             @"com.opa334.Dopamine",
             @"com.opa334.TrollStore",
             @"com.opa334.TrollStorePersistenceHelper",
-            @"com.apple.springboard",
-            @"com.apple.Preferences",
-            @"com.apple.mobilesafari",
-            @"com.apple.MobileSMS",
-            @"com.apple.mobilephone",
-            @"com.apple.mobilemail",
-            @"com.apple.appstore",
-            @"com.apple.AppStore",
-            @"com.apple.itunesu",
-            @"com.apple.iTunesU",
-            @"com.apple.Diagnostic",
-            @"com.apple.diagnostics",
-            @"com.apple.Preferences"
+            @"com.apple.springboard"
         ]];
     });
     if ([protectedBundles containsObject:_bundleID]) return NO;

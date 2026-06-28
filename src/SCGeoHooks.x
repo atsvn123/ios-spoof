@@ -288,7 +288,7 @@ static CLLocation *sc_make_location() {
             protected = [NSSet setWithArray:@[
                 @"com.iosspoof.app", @"org.coolstar.SileoStore", @"org.coolstar.Sileo",
                 @"com.saurik.Cydia", @"xyz.willy.Zebra", @"com.opa334.Dopamine",
-                @"com.opa334.TrollStore", @"com.apple.springboard", @"com.apple.Preferences"
+                @"com.opa334.TrollStore", @"com.apple.springboard"
             ]];
         });
         if ([protected containsObject:bid]) return;

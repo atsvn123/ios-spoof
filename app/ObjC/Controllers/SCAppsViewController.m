@@ -24,7 +24,8 @@
     ]];
     Class cls=NSClassFromString(@"LSApplicationWorkspace"); id ws=[cls performSelector:NSSelectorFromString(@"defaultWorkspace")];
     NSArray *raw=[ws performSelector:NSSelectorFromString(@"allInstalledApplications")]; NSMutableArray *out=[NSMutableArray array];
-    for(id app in raw){ NSString*b=[app valueForKey:@"applicationIdentifier"]; if(!b || [protectedBundles containsObject:b]) continue; NSString*n=[app valueForKey:@"localizedName"] ?: b; NSString*t=[app valueForKey:@"applicationType"] ?: @""; if([t isEqualToString:@"System"]) continue; [out addObject:@{@"name":n,@"bundle":b}]; }
+    NSSet *allowedSystemBundles = [NSSet setWithArray:@[@"com.apple.Preferences", @"com.apple.mobilesafari", @"com.apple.AppStore", @"com.apple.AppStore.Search", @"com.apple.MobileStore"]];
+    for(id app in raw){ NSString*b=[app valueForKey:@"applicationIdentifier"]; if(!b || [protectedBundles containsObject:b]) continue; NSString*n=[app valueForKey:@"localizedName"] ?: b; NSString*t=[app valueForKey:@"applicationType"] ?: @""; if([t isEqualToString:@"System"] && ![allowedSystemBundles containsObject:b]) continue; [out addObject:@{@"name":n,@"bundle":b}]; }
     return [out sortedArrayUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES selector:@selector(localizedCaseInsensitiveCompare:)]]];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }

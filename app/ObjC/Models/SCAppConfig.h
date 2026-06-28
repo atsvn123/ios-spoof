@@ -31,6 +31,7 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic, copy) NSString *proxyUser;
 @property (nonatomic, copy) NSString *proxyPass;
 @property (nonatomic) BOOL proxyUDP;
+@property (nonatomic) BOOL proxyStealthMode;
 
 @property (nonatomic) BOOL hideProxy;
 @property (nonatomic) BOOL hideVPN;

@@ -58,6 +58,7 @@ extern char **environ;
 // ---------------------------------------------------------------------------
 typedef struct {
     BOOL  running;
+    BOOL  stealth;
     char  proxyType[16];     // "socks5" | "http"
     char  host[256];
     uint16_t port;
@@ -839,6 +840,37 @@ static void *sc_doh_loop(void *arg) {
     return NULL;
 }
 
+static void *sc_tcp_listener_thread(void *arg) {
+    sc_tcp_listener_loop();
+    return NULL;
+}
+
+static void *sc_divert_sniff_thread(void *arg) {
+    sc_divert_sniff_loop();
+    return NULL;
+}
+
+static BOOL sc_start_stealth_proxy(void) {
+    sc_system_proxy_clear();
+    if (!sc_pf_load()) return NO;
+    g_state.running = YES;
+    pthread_t tcpThread, divertThread, dohThread;
+    pthread_create(&tcpThread, NULL, sc_tcp_listener_thread, NULL);
+    pthread_detach(tcpThread);
+    pthread_create(&divertThread, NULL, sc_divert_sniff_thread, NULL);
+    pthread_detach(divertThread);
+    pthread_create(&dohThread, NULL, sc_doh_loop, NULL);
+    pthread_detach(dohThread);
+    return YES;
+}
+
+static BOOL sc_start_compat_proxy(void) {
+    sc_pf_clear();
+    BOOL ok = sc_system_proxy_apply();
+    g_state.running = ok;
+    return ok;
+}
+
 // ---------------------------------------------------------------------------
 //  UDP relay (SOCKS5 UDP associate) - cho UDP app traffic (QUIC, gaming, v.v.)
 //  Nhận UDP packet từ client (bị PF rdr? Không, UDP không rdr qua TCP listener).
@@ -864,12 +896,18 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
             @"proxyType": @(g_state.proxyType),
             @"host": @(g_state.host),
             @"port": @(g_state.port),
-            @"udp": @(g_state.udp)
+            @"udp": @(g_state.udp),
+            @"stealth": @(g_state.stealth)
         } options:0 error:nil];
     }
     if ([c isEqualToString:@"start"]) {
         if (g_state.running) {
-            return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(YES), @"msg":@"already running"} options:0 error:nil];
+            g_state.running = NO;
+            sc_system_proxy_clear();
+            sc_pf_clear();
+            if (g_state.divert_fd >= 0) { close(g_state.divert_fd); g_state.divert_fd = -1; }
+            if (g_state.udp_fd >= 0) { close(g_state.udp_fd); g_state.udp_fd = -1; }
+            if (g_state.doh_fd >= 0) { close(g_state.doh_fd); g_state.doh_fd = -1; }
         }
         strlcpy(g_state.proxyType, [cmd[@"type"] UTF8String] ?: "socks5", sizeof(g_state.proxyType));
         strlcpy(g_state.host, [cmd[@"host"] UTF8String] ?: "", sizeof(g_state.host));
@@ -877,13 +915,17 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
         strlcpy(g_state.user, [cmd[@"user"] UTF8String] ?: "", sizeof(g_state.user));
         strlcpy(g_state.pass, [cmd[@"pass"] UTF8String] ?: "", sizeof(g_state.pass));
         g_state.udp = [cmd[@"udp"] boolValue];
+        g_state.stealth = [cmd[@"stealth"] boolValue];
         if (!g_state.host[0] || g_state.port == 0) {
             return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO), @"err":@"no host/port"} options:0 error:nil];
         }
-        g_state.running = YES;
-        sc_pf_clear();
-        BOOL ok = sc_system_proxy_apply();
-        sc_log(@"compat stealth proxy started: %@ %s:%u (API-hidden to apps)", strcmp(g_state.proxyType, "http") == 0 ? @"http" : @"socks5", g_state.host, g_state.port);
+        BOOL ok = g_state.stealth ? sc_start_stealth_proxy() : sc_start_compat_proxy();
+        if (!ok) {
+            g_state.running = NO;
+            sc_log(@"%@ proxy failed", g_state.stealth ? @"stealth" : @"compat");
+            return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO), @"err": g_state.stealth ? @"stealth PF/divert start failed" : @"system proxy apply failed"} options:0 error:nil];
+        }
+        sc_log(@"%@ proxy started: %@ %s:%u (API-hidden to apps)", g_state.stealth ? @"stealth" : @"compat", strcmp(g_state.proxyType, "http") == 0 ? @"http" : @"socks5", g_state.host, g_state.port);
         return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(ok)} options:0 error:nil];
     }
     if ([c isEqualToString:@"stop"]) {

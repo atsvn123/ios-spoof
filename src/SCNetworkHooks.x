@@ -629,8 +629,9 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
 
 CFArrayRef (*orig_CNCopySupportedInterfaces)(void);
 CFArrayRef sc_CNCopySupportedInterfaces(void) {
-    // Always call orig — returning empty array crashes some apps.
-    // Cellular fake is handled by CNCopyCurrentNetworkInfo returning NULL.
+    if (SCCellularMode()) {
+        return CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
+    }
     return orig_CNCopySupportedInterfaces ? orig_CNCopySupportedInterfaces() : NULL;
 }
 
@@ -659,12 +660,14 @@ CFDictionaryRef sc_CNCopyCurrentNetworkInfo(CFStringRef interfaceName) {
 
 static NSString *(*orig_NEHotspotNetwork_SSID)(id, SEL);
 static NSString *sc_NEHotspotNetwork_SSID(id self, SEL _cmd) {
+    if (SCCellularMode()) return nil;
     if (SC_ON() && CFG().networkMode == 1) return SCFakeSSID();
     return orig_NEHotspotNetwork_SSID ? orig_NEHotspotNetwork_SSID(self, _cmd) : nil;
 }
 
 static NSString *(*orig_NEHotspotNetwork_BSSID)(id, SEL);
 static NSString *sc_NEHotspotNetwork_BSSID(id self, SEL _cmd) {
+    if (SCCellularMode()) return nil;
     if (SC_ON() && CFG().networkMode == 1) return SCFakeBSSID();
     return orig_NEHotspotNetwork_BSSID ? orig_NEHotspotNetwork_BSSID(self, _cmd) : nil;
 }
@@ -741,6 +744,20 @@ static NSString *sc_NWInterface_name(id self, SEL _cmd) {
     return orig_NWInterface_name ? orig_NWInterface_name(self, _cmd) : nil;
 }
 
+static NSString *(*orig_NWPath_getSSID)(id, SEL);
+static NSString *sc_NWPath_getSSID(id self, SEL _cmd) {
+    if (SCCellularMode()) return nil;
+    if (SCWiFiMode()) return SCFakeSSID();
+    return orig_NWPath_getSSID ? orig_NWPath_getSSID(self, _cmd) : nil;
+}
+
+static NSString *(*orig_NWPath_getBSSID)(id, SEL);
+static NSString *sc_NWPath_getBSSID(id self, SEL _cmd) {
+    if (SCCellularMode()) return nil;
+    if (SCWiFiMode()) return SCFakeBSSID();
+    return orig_NWPath_getBSSID ? orig_NWPath_getBSSID(self, _cmd) : nil;
+}
+
 static void SCHookNWPathIfLoaded(void) {
     // Load Network.framework at runtime
     dlopen("/System/Library/Frameworks/Network.framework/Network", RTLD_NOW);
@@ -761,6 +778,14 @@ static void SCHookNWPathIfLoaded(void) {
         }
         if (class_getInstanceMethod(pathCls, @selector(usesInterfaceType:))) {
             MSHookMessageEx(pathCls, @selector(usesInterfaceType:), (IMP)sc_NWPath_usesInterfaceType, (IMP *)&orig_NWPath_usesInterfaceType);
+        }
+        SEL ssidSel = NSSelectorFromString(@"_getSSID");
+        if (class_getInstanceMethod(pathCls, ssidSel)) {
+            MSHookMessageEx(pathCls, ssidSel, (IMP)sc_NWPath_getSSID, (IMP *)&orig_NWPath_getSSID);
+        }
+        SEL bssidSel = NSSelectorFromString(@"_getBSSID");
+        if (class_getInstanceMethod(pathCls, bssidSel)) {
+            MSHookMessageEx(pathCls, bssidSel, (IMP)sc_NWPath_getBSSID, (IMP *)&orig_NWPath_getBSSID);
         }
     }
 

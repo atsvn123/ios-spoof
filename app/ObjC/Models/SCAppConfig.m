@@ -107,6 +107,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.proxyUser = d[@"proxyUser"] ?: @"";
     self.proxyPass = d[@"proxyPass"] ?: @"";
     self.proxyUDP = [d[@"proxyUDP"] boolValue];
+    self.proxyStealthMode = [d[@"proxyStealthMode"] boolValue];
     self.hideProxy = d[@"hideProxy"] ? [d[@"hideProxy"] boolValue] : YES;
     self.hideVPN = d[@"hideVPN"] ? [d[@"hideVPN"] boolValue] : YES;
     self.hideJailbreak = d[@"hideJailbreak"] ? [d[@"hideJailbreak"] boolValue] : YES;
@@ -170,6 +171,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     d[@"proxyUser"] = self.proxyUser ?: @"";
     d[@"proxyPass"] = self.proxyPass ?: @"";
     d[@"proxyUDP"] = @(self.proxyUDP);
+    d[@"proxyStealthMode"] = @(self.proxyStealthMode);
     d[@"hideProxy"] = @(self.hideProxy);
     d[@"hideVPN"] = @(self.hideVPN);
     d[@"hideJailbreak"] = @(self.hideJailbreak);

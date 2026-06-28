@@ -47,6 +47,7 @@ extern char **environ;
 #define SC_DOH_PORT     5353
 #define SC_CTL_SOCK     "/var/run/scproxyd.sock"
 #define SC_CTL_SOCK_RL  "/var/jb/var/run/scproxyd.sock"
+#define SC_CTL_PORT     7772
 #define SC_PF_ANCHOR    "com.iosspoof.proxy"
 #define SC_BUFSZ        65536
 #define SC_NAT_TIMEOUT  120   // giây, flow idle timeout
@@ -66,6 +67,7 @@ typedef struct {
     int   divert_fd;         // divert socket TCP
     int   udp_fd;            // SOCKS5 UDP relay socket
     int   ctl_fd;            // unix control socket
+    int   ctl_tcp_fd;        // localhost fallback control socket
     int   doh_fd;            // DoH resolver UDP socket
 } sc_state_t;
 
@@ -896,10 +898,65 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
     return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO), @"err":@"unknown cmd"} options:0 error:nil];
 }
 
+static void sc_handle_control_client(int c) {
+    uint32_t len = 0;
+    if (recv(c, &len, 4, 0) != 4) { close(c); return; }
+    len = ntohl(len);
+    if (len == 0 || len > 65536) { close(c); return; }
+    NSMutableData *buf = [NSMutableData dataWithLength:len];
+    ssize_t got = 0;
+    while (got < (ssize_t)len) {
+        ssize_t n = recv(c, (char *)buf.mutableBytes + got, len - got, 0);
+        if (n <= 0) break;
+        got += n;
+    }
+    if (got < (ssize_t)len) { close(c); return; }
+    NSDictionary *cmd = [NSJSONSerialization JSONObjectWithData:buf options:0 error:nil];
+    NSData *resp = cmd ? sc_handle_command(cmd) : nil;
+    if (!resp) resp = [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO)} options:0 error:nil];
+    uint32_t rlen = htonl((uint32_t)resp.length);
+    send(c, &rlen, 4, 0);
+    send(c, resp.bytes, resp.length, 0);
+    close(c);
+}
+
+static void *sc_control_tcp_loop(void *arg) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { sc_log(@"tcp control socket failed"); return NULL; }
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(SC_CTL_PORT);
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        sc_log(@"tcp control bind failed: %s", strerror(errno));
+        close(fd);
+        return NULL;
+    }
+    listen(fd, 8);
+    g_state.ctl_tcp_fd = fd;
+    sc_log(@"tcp control socket listening at 127.0.0.1:%d", SC_CTL_PORT);
+    while (1) {
+        int c = accept(fd, NULL, NULL);
+        if (c < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        sc_handle_control_client(c);
+    }
+    close(fd);
+    return NULL;
+}
+
 static void sc_control_loop(void) {
     mkdir("/var/run", 0755);
     mkdir("/var/jb/var", 0755);
     mkdir("/var/jb/var/run", 0755);
+    pthread_t tcpThread;
+    pthread_create(&tcpThread, NULL, sc_control_tcp_loop, NULL);
+    pthread_detach(tcpThread);
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) { sc_log(@"control socket failed"); return; }
     unlink(SC_CTL_SOCK); unlink(SC_CTL_SOCK_RL);
@@ -930,25 +987,7 @@ static void sc_control_loop(void) {
             if (errno == EINTR) continue;
             break;
         }
-        uint32_t len = 0;
-        if (recv(c, &len, 4, 0) != 4) { close(c); continue; }
-        len = ntohl(len);
-        if (len == 0 || len > 65536) { close(c); continue; }
-        NSMutableData *buf = [NSMutableData dataWithLength:len];
-        ssize_t got = 0;
-        while (got < (ssize_t)len) {
-            ssize_t n = recv(c, (char *)buf.mutableBytes + got, len - got, 0);
-            if (n <= 0) break;
-            got += n;
-        }
-        if (got < (ssize_t)len) { close(c); continue; }
-        NSDictionary *cmd = [NSJSONSerialization JSONObjectWithData:buf options:0 error:nil];
-        NSData *resp = cmd ? sc_handle_command(cmd) : nil;
-        if (!resp) resp = [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO)} options:0 error:nil];
-        uint32_t rlen = htonl((uint32_t)resp.length);
-        send(c, &rlen, 4, 0);
-        send(c, resp.bytes, resp.length, 0);
-        close(c);
+        sc_handle_control_client(c);
     }
     close(fd);
 }

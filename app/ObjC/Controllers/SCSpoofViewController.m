@@ -4,10 +4,13 @@
 #import "../Models/SCLocaleStore.h"
 #import <sys/socket.h>
 #import <sys/un.h>
+#import <netinet/in.h>
 #import <unistd.h>
 #import <arpa/inet.h>
 
 static NSDictionary *SCSendProxyCommand(NSDictionary *cmd) {
+    NSData *d = [NSJSONSerialization dataWithJSONObject:cmd options:0 error:nil];
+    if (!d) return nil;
     const char *paths[] = { "/var/jb/var/run/scproxyd.sock", "/var/run/scproxyd.sock", NULL };
     for (int i = 0; paths[i]; i++) {
         int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -16,8 +19,6 @@ static NSDictionary *SCSendProxyCommand(NSDictionary *cmd) {
         addr.sun_family = AF_UNIX;
         strlcpy(addr.sun_path, paths[i], sizeof(addr.sun_path));
         if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); continue; }
-        NSData *d = [NSJSONSerialization dataWithJSONObject:cmd options:0 error:nil];
-        if (!d) { close(fd); return nil; }
         uint32_t len = htonl((uint32_t)d.length);
         if (send(fd, &len, 4, 0) != 4 || send(fd, d.bytes, d.length, 0) != (ssize_t)d.length) { close(fd); return nil; }
         uint32_t rlen = 0;
@@ -28,6 +29,28 @@ static NSDictionary *SCSendProxyCommand(NSDictionary *cmd) {
         close(fd);
         if (got <= 0) return nil;
         return [NSJSONSerialization JSONObjectWithData:buf options:0 error:nil];
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd >= 0) {
+        struct sockaddr_in addr = {0};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(7772);
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            uint32_t len = htonl((uint32_t)d.length);
+            if (send(fd, &len, 4, 0) == 4 && send(fd, d.bytes, d.length, 0) == (ssize_t)d.length) {
+                uint32_t rlen = 0;
+                if (recv(fd, &rlen, 4, 0) == 4) {
+                    rlen = ntohl(rlen);
+                    NSMutableData *buf = [NSMutableData dataWithLength:rlen];
+                    ssize_t got = recv(fd, buf.mutableBytes, rlen, 0);
+                    close(fd);
+                    if (got > 0) return [NSJSONSerialization JSONObjectWithData:buf options:0 error:nil];
+                    return nil;
+                }
+            }
+        }
+        close(fd);
     }
     return nil;
 }

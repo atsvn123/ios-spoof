@@ -29,7 +29,7 @@
     return total > 0 ? total / 3 : 0;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 10; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 9; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
@@ -62,8 +62,6 @@
                 c.detailTextLabel.textColor = installed ? [UIColor systemGreenColor] : [UIColor systemRedColor];
                 return c;
             }
-            return [self cellWithTitle:@"Target Apps" detail:[NSString stringWithFormat:@"%lu app", (unsigned long)self.config.targetBundles.count]];
-        }
             return [self cellWithTitle:@"Target Apps" detail:[NSString stringWithFormat:@"%lu app", (unsigned long)self.config.targetBundles.count]];
         }
         case 1: {

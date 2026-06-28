@@ -13,8 +13,7 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
 
 static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc, NSString *mnc, NSString *iso, NSString *radio, NSString *phone) {
     return @[
-        @{@"enabled":@YES, @"label":@"Sim 1", @"carrierName":name ?: @"Viettel", @"carrierMCC":mcc ?: @"452", @"carrierMNC":mnc ?: @"04", @"carrierISO":iso ?: @"vn", @"radioTech":radio ?: @"CTRadioAccessTechnologyLTE", @"phoneNumber":phone ?: @"", @"eSIM":@NO},
-        @{@"enabled":@NO, @"label":@"Sim 2", @"carrierName":@"Mobifone", @"carrierMCC":@"452", @"carrierMNC":@"01", @"carrierISO":@"vn", @"radioTech":@"CTRadioAccessTechnologyLTE", @"phoneNumber":@"", @"eSIM":@YES}
+        @{@"enabled":@YES, @"label":@"Sim 1", @"carrierName":name ?: @"Viettel", @"carrierMCC":mcc ?: @"452", @"carrierMNC":mnc ?: @"04", @"carrierISO":iso ?: @"vn", @"radioTech":radio ?: @"CTRadioAccessTechnologyLTE", @"phoneNumber":phone ?: @"", @"eSIM":@NO}
     ];
 }
 
@@ -94,6 +93,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.carrierISO = d[@"carrierISO"] ?: @"vn";
     self.radioTech = d[@"radioTech"] ?: @"CTRadioAccessTechnologyLTE";
     self.simSlots = [d[@"simSlots"] isKindOfClass:NSArray.class] ? d[@"simSlots"] : SCDefaultSIMSlots(self.carrierName, self.carrierMCC, self.carrierMNC, self.carrierISO, self.radioTech, d[@"phoneNumber"] ?: @"");
+    self.activeSIMIndex = d[@"activeSIMIndex"] ? [d[@"activeSIMIndex"] integerValue] : 0;
     self.geoEnabled = [d[@"geoEnabled"] boolValue];
     self.latitude = d[@"latitude"] ? [d[@"latitude"] doubleValue] : 21.0285;
     self.longitude = d[@"longitude"] ? [d[@"longitude"] doubleValue] : 105.8542;
@@ -155,6 +155,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     d[@"carrierISO"] = self.carrierISO ?: @"";
     d[@"radioTech"] = self.radioTech ?: @"";
     d[@"simSlots"] = self.simSlots ?: SCDefaultSIMSlots(self.carrierName, self.carrierMCC, self.carrierMNC, self.carrierISO, self.radioTech, self.phoneNumber);
+    d[@"activeSIMIndex"] = @(MAX(0, MIN(self.activeSIMIndex, (NSInteger)(self.simSlots.count ? self.simSlots.count - 1 : 0))));
     d[@"geoEnabled"] = @(self.geoEnabled);
     d[@"latitude"] = @(self.latitude);
     d[@"longitude"] = @(self.longitude);

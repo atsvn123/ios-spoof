@@ -88,6 +88,14 @@ static NSDictionary *SCSIMInfoForCarrier(id carrier) {
     return [info isKindOfClass:NSDictionary.class] ? info : nil;
 }
 
+static NSDictionary *SCActiveSIMSlot(void) {
+    NSArray *slots = SCEnabledSIMSlots();
+    if (slots.count == 0) return nil;
+    NSInteger idx = CFG().activeSIMIndex;
+    if (idx < 0 || idx >= (NSInteger)slots.count) idx = 0;
+    return slots[idx];
+}
+
 static NSDictionary *SCCellularIPv4Dictionary(void) {
     NSString *serviceID = CFG().cellularServiceID.length ? CFG().cellularServiceID : @"00000000-0000-0000-0000-000000000000";
     NSString *address = CFG().cellularIPv4.length ? CFG().cellularIPv4 : @"10.23.42.10";
@@ -131,24 +139,28 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 %hook CTCarrier
 - (NSString *)carrierName {
     NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (!sim) sim = SCActiveSIMSlot();
     if (SC_ON() && sim) return sim[@"carrierName"] ?: @"carrier";
     if (SC_ON() && P()) return P().carrierName ?: @"carrier";
     return %orig;
 }
 - (NSString *)mobileCountryCode {
     NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (!sim) sim = SCActiveSIMSlot();
     if (SC_ON() && sim) return sim[@"carrierMCC"] ?: @"";
     if (SC_ON() && P()) return P().carrierMCC ?: @"";
     return %orig;
 }
 - (NSString *)mobileNetworkCode {
     NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (!sim) sim = SCActiveSIMSlot();
     if (SC_ON() && sim) return sim[@"carrierMNC"] ?: @"";
     if (SC_ON() && P()) return P().carrierMNC ?: @"";
     return %orig;
 }
 - (NSString *)isoCountryCode {
     NSDictionary *sim = SCSIMInfoForCarrier(self);
+    if (!sim) sim = SCActiveSIMSlot();
     if (SC_ON() && sim) {
         NSString *iso = sim[@"carrierISO"] ?: @"vn";
         return iso.uppercaseString;
@@ -164,7 +176,12 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 %hook CTTelephonyNetworkInfo
 - (CTCarrier *)subscriberCellularProvider {
     CTCarrier *orig = %orig;
-    if (SC_ON() && P()) return orig ?: [CTCarrier new];
+    if (SC_ON() && P()) {
+        CTCarrier *c = orig ?: [CTCarrier new];
+        NSDictionary *sim = SCActiveSIMSlot();
+        if (sim) objc_setAssociatedObject(c, SCSIMInfoKey, sim, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return c;
+    }
     return orig;
 }
 - (NSDictionary<NSString *, CTCarrier *> *)serviceSubscriberCellularProviders {
@@ -181,6 +198,8 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 }
 - (NSString *)serviceSubscriberCellularProvidersDidUpdateNotifier { return %orig; }
 - (NSString *)currentRadioAccessTechnology {
+    NSDictionary *sim = SCActiveSIMSlot();
+    if (SC_ON() && sim) return sim[@"radioTech"] ?: P().radioTech ?: @"CTRadioAccessTechnologyLTE";
     if (SC_ON() && P()) return P().radioTech ?: @"CTRadioAccessTechnologyLTE";
     return %orig;
 }
@@ -196,7 +215,7 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
     return m.copy;
 }
 - (NSString *)dataServiceIdentifier {
-    if (SC_ON() && P()) return @"kCTCarrierSlot1";
+    if (SC_ON() && P()) return [NSString stringWithFormat:@"kCTCarrierSlot%ld", (long)CFG().activeSIMIndex + 1];
     return %orig;
 }
 %end
@@ -689,6 +708,12 @@ static BOOL sc_CTPrivate_isSimPresent(id self, SEL _cmd) {
 }
 
 static void SCHookPrivateCoreTelephonyIfLoaded(void) {
+#ifndef IOS_SPOOF_ENABLE_PRIVATE_CT_HOOKS
+#define IOS_SPOOF_ENABLE_PRIVATE_CT_HOOKS 0
+#endif
+#if !IOS_SPOOF_ENABLE_PRIVATE_CT_HOOKS
+    return;
+#endif
     NSArray *classes = @[@"CTSubscriber", @"CTSubscription", @"CTSubscriptionContext", @"CTSIMSupport"];
     for (NSString *name in classes) {
         Class cls = objc_getClass(name.UTF8String);

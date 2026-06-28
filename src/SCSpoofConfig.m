@@ -7,7 +7,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 #define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
-@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSArray<NSDictionary *> *_simSlots; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_cellularServiceID; NSString *_cellularIPv4; NSString *_cellularRouter; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; }
+@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSArray<NSDictionary *> *_simSlots; NSInteger _activeSIMIndex; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_cellularServiceID; NSString *_cellularIPv4; NSString *_cellularRouter; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; }
 @end
 
 @implementation SCSpoofConfig
@@ -70,6 +70,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _carrierISO = SC_READ_STR(@"carrierISO");
     _radioTech = SC_READ_STR(@"radioTech");
     _simSlots = [d[@"simSlots"] isKindOfClass:NSArray.class] ? d[@"simSlots"] : @[];
+    _activeSIMIndex = d[@"activeSIMIndex"] ? [d[@"activeSIMIndex"] integerValue] : 0;
     _geoEnabled = SC_READ_BOOL(@"geoEnabled");
     _latitude = SC_READ_DBL(@"latitude");
     _longitude = SC_READ_DBL(@"longitude");
@@ -259,6 +260,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (NSString *)spoofedMAC { return _mac; }
 - (NSString *)spoofedIDFA { return _idfa; }
 - (NSArray<NSDictionary *> *)simSlots { return _simSlots; }
+- (NSInteger)activeSIMIndex { return _activeSIMIndex; }
 - (NSInteger)networkMode { return _networkMode; }
 - (NSString *)wifiSSID { return _wifiSSID; }
 - (NSString *)wifiBSSID { return _wifiBSSID; }

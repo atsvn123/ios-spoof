@@ -130,7 +130,7 @@
         case 0: return self.config.networkMode == 2 ? 2 : 4;
         case 1: return self.config.proxyEnabled ? 7 : 2;
         case 2: return [self gpsRowCount];
-        case 3: return 1 + 5 + 10;
+        case 3: return 1 + 5 + (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
         case 4: return 5;
         case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
         case 6: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
@@ -325,27 +325,36 @@
 }
 
 - (UITableViewCell *)simCell:(NSIndexPath *)i {
-    NSInteger idx = (i.row - 6) / 5;
-    NSInteger field = (i.row - 6) % 5;
+    NSInteger simStart = 6;
+    NSInteger simRows = self.config.simSlots.count * 7;
+    if (i.row == simStart + simRows) {
+        UITableViewCell *c = [self cellWithTitle:@"Thêm SIM" detail:@"Thêm Sim 2/eSIM"];
+        c.textLabel.textColor = [UIColor systemBlueColor];
+        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        return c;
+    }
+    NSInteger idx = (i.row - simStart) / 7;
+    NSInteger field = (i.row - simStart) % 7;
     NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
-    while (slots.count < 2) [slots addObject:@{}];
     NSDictionary *sim = slots[idx];
-    NSArray *titles = @[
-        [NSString stringWithFormat:@"Sim %ld Phone", (long)idx + 1],
-        [NSString stringWithFormat:@"Sim %ld Carrier", (long)idx + 1],
-        [NSString stringWithFormat:@"Sim %ld MCC", (long)idx + 1],
-        [NSString stringWithFormat:@"Sim %ld MNC", (long)idx + 1],
-        [NSString stringWithFormat:@"Sim %ld eSIM", (long)idx + 1]
-    ];
-    if (field == 4) {
-        UITableViewCell *c = [self switchCellWithTitle:titles[field] on:[sim[@"eSIM"] boolValue] action:@selector(toggleSimESIM:)];
+    NSString *prefix = [NSString stringWithFormat:@"Sim %ld", (long)idx + 1];
+    if (field == 0) return [self switchCellWithTitle:[NSString stringWithFormat:@"%@ Active", prefix] on:self.config.activeSIMIndex == idx action:@selector(toggleActiveSIM:)];
+    if (field == 1) {
+        UITableViewCell *c = [self cellWithTitle:[NSString stringWithFormat:@"%@ Preset", prefix] detail:sim[@"carrierName"] ?: @"Chọn preset"];
+        c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        return c;
+    }
+    if (field == 6) {
+        UITableViewCell *c = [self switchCellWithTitle:[NSString stringWithFormat:@"%@ eSIM", prefix] on:[sim[@"eSIM"] boolValue] action:@selector(toggleSimESIM:)];
         ((UISwitch *)c.accessoryView).tag = 880 + idx;
         return c;
     }
+    NSArray *titles = @[@"Phone", @"Carrier", @"MCC", @"MNC"];
     NSArray *keys = @[@"phoneNumber", @"carrierName", @"carrierMCC", @"carrierMNC"];
-    NSString *text = [sim[keys[field]] description] ?: @"";
-    UITableViewCell *c = [self cellWithTitle:titles[field] detail:nil];
-    c.accessoryView = [self textFieldWithText:text placeholder:@"" tag:810 + idx * 10 + field keyboard:(field==2||field==3||field==0)?UIKeyboardTypePhonePad:UIKeyboardTypeDefault];
+    NSInteger textFieldIndex = field - 2;
+    NSString *text = [sim[keys[textFieldIndex]] description] ?: @"";
+    UITableViewCell *c = [self cellWithTitle:[NSString stringWithFormat:@"%@ %@", prefix, titles[textFieldIndex]] detail:nil];
+    c.accessoryView = [self textFieldWithText:text placeholder:@"" tag:810 + idx * 10 + textFieldIndex keyboard:(textFieldIndex==0||textFieldIndex==2||textFieldIndex==3)?UIKeyboardTypePhonePad:UIKeyboardTypeDefault];
     return c;
 }
 
@@ -366,6 +375,7 @@
         return;
     }
     if (i.section == 3 && i.row == 0) { [self showCarrierPresets]; return; }
+    if (i.section == 3 && i.row >= 6) { [self handleSIMRow:i]; return; }
     if (i.section == 0 && i.row == 3) { [self randomBSSID]; return; }
     if (i.section == 5) { [self showSystemPicker:i.row]; return; }
     if (i.section == 6 && i.row == 0) { [self randomBluetoothMAC]; return; }
@@ -809,6 +819,58 @@
     slots[idx] = sim;
     self.config.simSlots = slots;
     [self.config save];
+}
+
+- (void)toggleActiveSIM:(UISwitch *)s {
+    CGPoint p = [s convertPoint:CGPointZero toView:self.tableView];
+    NSIndexPath *i = [self.tableView indexPathForRowAtPoint:p];
+    if (!i || i.section != 3 || i.row < 6) return;
+    NSInteger idx = (i.row - 6) / 7;
+    self.config.activeSIMIndex = idx;
+    [self.config save];
+    [self.tableView reloadData];
+}
+
+- (void)handleSIMRow:(NSIndexPath *)i {
+    NSInteger simStart = 6;
+    NSInteger simRows = self.config.simSlots.count * 7;
+    if (i.row == simStart + simRows && self.config.simSlots.count < 2) {
+        NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
+        [slots addObject:@{@"enabled":@YES, @"label":@"Sim 2", @"carrierName":@"Mobifone", @"carrierMCC":@"452", @"carrierMNC":@"01", @"carrierISO":@"vn", @"radioTech":@"CTRadioAccessTechnologyLTE", @"phoneNumber":@"", @"eSIM":@YES}];
+        self.config.simSlots = slots;
+        [self.config save];
+        [self.tableView reloadData];
+        return;
+    }
+    NSInteger idx = (i.row - simStart) / 7;
+    NSInteger field = (i.row - simStart) % 7;
+    if (field == 1) [self showSIMPreset:idx];
+}
+
+- (void)showSIMPreset:(NSInteger)idx {
+    NSArray *presets = @[
+        @[@"Viettel", @"452", @"04", @"vn", @"CTRadioAccessTechnologyLTE"],
+        @[@"Viettel 5G", @"452", @"04", @"vn", @"CTRadioAccessTechnologyNRNSA"],
+        @[@"Mobifone", @"452", @"01", @"vn", @"CTRadioAccessTechnologyLTE"],
+        @[@"Vinaphone", @"452", @"02", @"vn", @"CTRadioAccessTechnologyLTE"],
+        @[@"T-Mobile", @"310", @"260", @"us", @"CTRadioAccessTechnologyLTE"],
+        @[@"AT&T", @"310", @"410", @"us", @"CTRadioAccessTechnologyLTE"],
+        @[@"Verizon", @"311", @"480", @"us", @"CTRadioAccessTechnologyLTE"]
+    ];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Sim %ld Preset", (long)idx + 1] message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSArray *p in presets) {
+        [alert addAction:[UIAlertAction actionWithTitle:p[0] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
+            NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
+            NSMutableDictionary *sim = [NSMutableDictionary dictionaryWithDictionary:slots[idx]];
+            sim[@"carrierName"] = p[0]; sim[@"carrierMCC"] = p[1]; sim[@"carrierMNC"] = p[2]; sim[@"carrierISO"] = p[3]; sim[@"radioTech"] = p[4]; sim[@"enabled"] = @YES;
+            slots[idx] = sim;
+            self.config.simSlots = slots;
+            [self.config save];
+            [self.tableView reloadData];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)saveAndReload {

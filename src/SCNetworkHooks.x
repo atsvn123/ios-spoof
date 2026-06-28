@@ -60,19 +60,80 @@ static BOOL SC_ON()         { return CFG().enabled; }
 static BOOL SCCellularMode(void) { return SC_ON() && CFG().networkMode == 2; }
 static BOOL SCWiFiMode(void)     { return SC_ON() && CFG().networkMode == 1; }
 
-static BOOL SCShouldHideProxyForCurrentCaller(void) {
+static BOOL SCShouldHideProxyForCaller(void *caller) {
     if (!SC_ON() || !CFG().hideProxy) return NO;
-    if (!CFG().proxyEnabled) return YES;
-
-    Dl_info info = {0};
-    void *caller = __builtin_return_address(0);
-    if (caller && dladdr(caller, &info) && info.dli_fname) {
-        NSString *image = [NSString stringWithUTF8String:info.dli_fname];
-        if ([image hasPrefix:@"/System/Library/"] || [image hasPrefix:@"/usr/lib/"]) {
-            return NO; // Let Apple networking stack see the proxy so traffic still works.
+    if (CFG().proxyEnabled) {
+        Dl_info info = {0};
+        if (caller && dladdr(caller, &info) && info.dli_fname) {
+            NSString *image = [NSString stringWithUTF8String:info.dli_fname];
+            if ([image containsString:@"/CFNetwork.framework/"] ||
+                [image containsString:@"/Network.framework/"] ||
+                [image containsString:@"/SystemConfiguration.framework/"] ||
+                [image hasSuffix:@"/libnetwork.dylib"]) {
+                return NO; // Internal Apple stack still needs the real system proxy to route traffic.
+            }
         }
     }
     return YES;
+}
+
+static BOOL SCShouldHideProxyForCurrentCaller(void) {
+    return SC_ON() && CFG().hideProxy;
+}
+
+static BOOL SCShouldHideVPNState(void) {
+    return SC_ON() && CFG().hideVPN;
+}
+
+static BOOL SCProxyKeyLooksSensitive(NSString *key) {
+    if (![key isKindOfClass:NSString.class]) return NO;
+    return [key containsString:@"Proxy"] || [key containsString:@"proxy"] ||
+           [key containsString:@"Proxies"] || [key containsString:@"SOCKS"] ||
+           [key containsString:@"HTTPProxy"] || [key containsString:@"HTTPSProxy"] ||
+           [key containsString:@"ProxyAutoConfig"] || [key containsString:@"PAC"];
+}
+
+static BOOL SCVPNKeyLooksSensitive(NSString *key) {
+    if (![key isKindOfClass:NSString.class]) return NO;
+    return [key containsString:@"VPN"] || [key containsString:@"PPP"] ||
+           [key containsString:@"IPSec"] || [key containsString:@"IPsec"] ||
+           [key containsString:@"utun"] || [key containsString:@"NEVPN"] ||
+           [key containsString:@"NetworkExtension"] || [key containsString:@"com.apple.networkextension"];
+}
+
+static BOOL SCNetworkStateKeyLooksSensitiveForCaller(NSString *key, void *caller) {
+    if (SCShouldHideProxyForCaller(caller) && SCProxyKeyLooksSensitive(key)) return YES;
+    if (SCShouldHideVPNState() && SCVPNKeyLooksSensitive(key)) return YES;
+    return NO;
+}
+
+static BOOL SCNetworkStateKeyLooksSensitive(NSString *key) {
+    if (SCShouldHideProxyForCurrentCaller() && SCProxyKeyLooksSensitive(key)) return YES;
+    if (SCShouldHideVPNState() && SCVPNKeyLooksSensitive(key)) return YES;
+    return NO;
+}
+
+static id SCSanitizedNetworkStateObject(id obj, void *caller) {
+    if ([obj isKindOfClass:NSDictionary.class]) {
+        NSMutableDictionary *clean = [NSMutableDictionary dictionary];
+        [(NSDictionary *)obj enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+            NSString *k = [key isKindOfClass:NSString.class] ? key : [key description];
+            if (SCNetworkStateKeyLooksSensitiveForCaller(k, caller)) return;
+            id sanitized = SCSanitizedNetworkStateObject(value, caller);
+            if (sanitized) clean[key] = sanitized;
+        }];
+        return clean.copy;
+    }
+    if ([obj isKindOfClass:NSArray.class]) {
+        NSMutableArray *clean = [NSMutableArray array];
+        for (id item in (NSArray *)obj) {
+            id sanitized = SCSanitizedNetworkStateObject(item, caller);
+            if (sanitized) [clean addObject:sanitized];
+        }
+        return clean.copy;
+    }
+    if ([obj isKindOfClass:NSString.class] && SCNetworkStateKeyLooksSensitiveForCaller(obj, caller)) return nil;
+    return obj;
 }
 
 static BOOL SCIsWiFiInterfaceName(const char *name) {
@@ -262,8 +323,7 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
 CFDictionaryRef (*orig_CFNetworkCopySystemProxySettings)(void);
 CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
     CFDictionaryRef r = orig_CFNetworkCopySystemProxySettings();
-    if (SCShouldHideProxyForCurrentCaller()) {
-        // Trả về dict rỗng (no proxy) để app không thấy HTTP proxy
+    if (SCShouldHideProxyForCaller(__builtin_return_address(0))) {
         if (r) CFRelease(r);
         return CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
     }
@@ -272,11 +332,46 @@ CFDictionaryRef sc_CFNetworkCopySystemProxySettings(void) {
 
 CFArrayRef (*orig_CFNetworkCopyProxiesForURL)(CFURLRef, CFDictionaryRef);
 CFArrayRef sc_CFNetworkCopyProxiesForURL(CFURLRef url, CFDictionaryRef settings) {
-    if (SCShouldHideProxyForCurrentCaller()) {
-        // Trả về empty array -> không proxy
-        return CFArrayCreate(NULL, NULL, 0, NULL);
+    if (SCShouldHideProxyForCaller(__builtin_return_address(0))) {
+        CFStringRef keys[] = { kCFProxyTypeKey };
+        CFStringRef values[] = { kCFProxyTypeNone };
+        CFDictionaryRef direct = CFDictionaryCreate(NULL, (const void **)keys, (const void **)values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        CFArrayRef arr = CFArrayCreate(NULL, (const void **)&direct, 1, &kCFTypeArrayCallBacks);
+        CFRelease(direct);
+        return arr;
     }
     return orig_CFNetworkCopyProxiesForURL(url, settings);
+}
+
+static NSDictionary *(*orig_NSURLSessionConfiguration_connectionProxyDictionary)(id, SEL);
+static NSDictionary *sc_NSURLSessionConfiguration_connectionProxyDictionary(id self, SEL _cmd) {
+    if (SCShouldHideProxyForCaller(__builtin_return_address(0))) return @{};
+    return orig_NSURLSessionConfiguration_connectionProxyDictionary ? orig_NSURLSessionConfiguration_connectionProxyDictionary(self, _cmd) : nil;
+}
+
+static void (*orig_NSURLSessionConfiguration_setConnectionProxyDictionary)(id, SEL, NSDictionary *);
+static void sc_NSURLSessionConfiguration_setConnectionProxyDictionary(id self, SEL _cmd, NSDictionary *dictionary) {
+    if (SCShouldHideProxyForCaller(__builtin_return_address(0))) {
+        orig_NSURLSessionConfiguration_setConnectionProxyDictionary ? orig_NSURLSessionConfiguration_setConnectionProxyDictionary(self, _cmd, nil) : (void)0;
+        return;
+    }
+    if (orig_NSURLSessionConfiguration_setConnectionProxyDictionary) orig_NSURLSessionConfiguration_setConnectionProxyDictionary(self, _cmd, dictionary);
+}
+
+static void SCHookNSURLSessionConfigurationProxyIfLoaded(void) {
+    Class cls = objc_getClass("NSURLSessionConfiguration");
+    if (!cls) return;
+    static BOOL hooked = NO;
+    if (hooked) return;
+    hooked = YES;
+    SEL getter = @selector(connectionProxyDictionary);
+    if (class_getInstanceMethod(cls, getter)) {
+        MSHookMessageEx(cls, getter, (IMP)sc_NSURLSessionConfiguration_connectionProxyDictionary, (IMP *)&orig_NSURLSessionConfiguration_connectionProxyDictionary);
+    }
+    SEL setter = @selector(setConnectionProxyDictionary:);
+    if (class_getInstanceMethod(cls, setter)) {
+        MSHookMessageEx(cls, setter, (IMP)sc_NSURLSessionConfiguration_setConnectionProxyDictionary, (IMP *)&orig_NSURLSessionConfiguration_setConnectionProxyDictionary);
+    }
 }
 
 // ============================================================================
@@ -312,17 +407,9 @@ CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRe
         }
     }
 
-    if (SCShouldHideProxyForCurrentCaller() && key) {
+    if ((SCShouldHideProxyForCaller(__builtin_return_address(0)) || SCShouldHideVPNState()) && key) {
         NSString *k = (__bridge NSString *)key;
-        // ẩn HTTP proxy, HTTPS proxy, SOCKS, auto proxy
-        if ([k containsString:@"Proxy"] || [k containsString:@"proxy"] ||
-            [k containsString:@"HTTPProxy"] || [k containsString:@"HTTPSProxy"] ||
-            [k containsString:@"SOCKSProxy"] || [k containsString:@"ProxyAutoConfig"]) {
-            return NULL;
-        }
-        // ẩn state VPN / PPP / IPsec
-        if (CFG().hideVPN && ([k containsString:@"VPN"] || [k containsString:@"PPP"] ||
-            [k containsString:@"IPSec"] || [k containsString:@"com.apple.networkextension"])) {
+        if (SCNetworkStateKeyLooksSensitiveForCaller(k, __builtin_return_address(0))) {
             return NULL;
         }
     }
@@ -331,18 +418,20 @@ CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRe
 
 CFArrayRef (*orig_SCDynamicStoreCopyKeyList)(SCDynamicStoreRef, CFStringRef);
 CFArrayRef sc_SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef pattern) {
+    void *caller = __builtin_return_address(0);
     CFArrayRef r = orig_SCDynamicStoreCopyKeyList(store, pattern);
     if (SC_ON() && r) {
         NSMutableArray *filtered = [NSMutableArray array];
         for (id item in (__bridge NSArray *)r) {
             NSString *key = [item isKindOfClass:NSString.class] ? item : [item description];
             BOOL drop = NO;
+            if (SCNetworkStateKeyLooksSensitiveForCaller(key, caller)) drop = YES;
             if (SCCellularMode()) {
-                drop = [key containsString:@"Interface/en0"] || [key containsString:@"Interface/awdl"] ||
+                drop = drop || [key containsString:@"Interface/en0"] || [key containsString:@"Interface/awdl"] ||
                        [key containsString:@"Interface/llw"] || [key containsString:@"AirPort"] ||
                        [key containsString:@"Wi-Fi"] || [key containsString:@"Wifi"];
             } else if (SCWiFiMode()) {
-                drop = [key containsString:@"Interface/pdp_ip"];
+                drop = drop || [key containsString:@"Interface/pdp_ip"];
             }
             if (!drop) [filtered addObject:item];
         }
@@ -351,13 +440,14 @@ CFArrayRef sc_SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef pat
             return CFBridgingRetain(filtered);
         }
     }
-    if (SCShouldHideProxyForCurrentCaller() && r && pattern) {
+    if ((SCShouldHideProxyForCaller(caller) || SCShouldHideVPNState()) && r && pattern) {
         NSString *p = (__bridge NSString *)pattern;
-        if ([p containsString:@"Proxy"] || [p containsString:@"proxy"]) {
+        if (SCNetworkStateKeyLooksSensitiveForCaller(p, caller) ||
+            (SCShouldHideProxyForCaller(caller) && ([p containsString:@"Proxy"] || [p containsString:@"proxy"]))) {
             CFRelease(r);
             return CFArrayCreate(NULL, NULL, 0, NULL);
         }
-        if (CFG().hideVPN && ([p containsString:@"VPN"] || [p containsString:@"PPP"] ||
+        if (SCShouldHideVPNState() && ([p containsString:@"VPN"] || [p containsString:@"PPP"] ||
             [p containsString:@"IPSec"])) {
             CFRelease(r);
             return CFArrayCreate(NULL, NULL, 0, NULL);
@@ -456,6 +546,60 @@ char *sc_if_indextoname(unsigned int ifindex, char *ifname) {
         }
     }
     return r;
+}
+
+CFPropertyListRef (*orig_SCPreferencesPathGetValue)(SCPreferencesRef, CFStringRef);
+CFPropertyListRef sc_SCPreferencesPathGetValue(SCPreferencesRef prefs, CFStringRef path) {
+    void *caller = __builtin_return_address(0);
+    if (path && SCNetworkStateKeyLooksSensitiveForCaller((__bridge NSString *)path, caller)) return NULL;
+    CFPropertyListRef value = orig_SCPreferencesPathGetValue ? orig_SCPreferencesPathGetValue(prefs, path) : NULL;
+    if (!value || (!SCShouldHideProxyForCaller(caller) && !SCShouldHideVPNState())) return value;
+    id sanitized = SCSanitizedNetworkStateObject((__bridge id)value, caller);
+    if (sanitized != (__bridge id)value) return CFBridgingRetain(sanitized);
+    return value;
+}
+
+CFPropertyListRef (*orig_SCPreferencesGetValue)(SCPreferencesRef, CFStringRef);
+CFPropertyListRef sc_SCPreferencesGetValue(SCPreferencesRef prefs, CFStringRef key) {
+    void *caller = __builtin_return_address(0);
+    if (key && SCNetworkStateKeyLooksSensitiveForCaller((__bridge NSString *)key, caller)) return NULL;
+    CFPropertyListRef value = orig_SCPreferencesGetValue ? orig_SCPreferencesGetValue(prefs, key) : NULL;
+    if (!value || (!SCShouldHideProxyForCaller(caller) && !SCShouldHideVPNState())) return value;
+    id sanitized = SCSanitizedNetworkStateObject((__bridge id)value, caller);
+    if (sanitized != (__bridge id)value) return CFBridgingRetain(sanitized);
+    return value;
+}
+
+static NSInteger (*orig_NEVPNConnection_status)(id, SEL);
+static NSInteger sc_NEVPNConnection_status(id self, SEL _cmd) {
+    if (SCShouldHideVPNState()) return 1; // NEVPNStatusDisconnected
+    return orig_NEVPNConnection_status ? orig_NEVPNConnection_status(self, _cmd) : 1;
+}
+
+static void (*orig_NETunnelProviderManager_loadAll)(id, SEL, void (^)(NSArray *, NSError *));
+static void sc_NETunnelProviderManager_loadAll(id self, SEL _cmd, void (^completion)(NSArray *, NSError *)) {
+    if (SCShouldHideVPNState()) {
+        if (completion) completion(@[], nil);
+        return;
+    }
+    if (orig_NETunnelProviderManager_loadAll) orig_NETunnelProviderManager_loadAll(self, _cmd, completion);
+}
+
+static void SCHookNetworkExtensionVPNIfLoaded(void) {
+    dlopen("/System/Library/Frameworks/NetworkExtension.framework/NetworkExtension", RTLD_NOW);
+    static BOOL hooked = NO;
+    if (hooked) return;
+    hooked = YES;
+    Class conn = objc_getClass("NEVPNConnection");
+    if (conn && class_getInstanceMethod(conn, @selector(status))) {
+        MSHookMessageEx(conn, @selector(status), (IMP)sc_NEVPNConnection_status, (IMP *)&orig_NEVPNConnection_status);
+    }
+    Class tunnel = objc_getClass("NETunnelProviderManager");
+    Class meta = tunnel ? object_getClass(tunnel) : Nil;
+    SEL loadAll = @selector(loadAllFromPreferencesWithCompletionHandler:);
+    if (meta && class_getClassMethod(tunnel, loadAll)) {
+        MSHookMessageEx(meta, loadAll, (IMP)sc_NETunnelProviderManager_loadAll, (IMP *)&orig_NETunnelProviderManager_loadAll);
+    }
 }
 
 // ============================================================================
@@ -802,6 +946,18 @@ static void SCHookPrivateCoreTelephonyIfLoaded(void) {
                                (void *)sc_SCDynamicStoreCopyKeyList,
                                (void **)&orig_SCDynamicStoreCopyKeyList);
             }
+            void *prefsPathGetValue = dlsym(sc, "SCPreferencesPathGetValue");
+            if (prefsPathGetValue) {
+                MSHookFunction(prefsPathGetValue,
+                               (void *)sc_SCPreferencesPathGetValue,
+                               (void **)&orig_SCPreferencesPathGetValue);
+            }
+            void *prefsGetValue = dlsym(sc, "SCPreferencesGetValue");
+            if (prefsGetValue) {
+                MSHookFunction(prefsGetValue,
+                               (void *)sc_SCPreferencesGetValue,
+                               (void **)&orig_SCPreferencesGetValue);
+            }
             MSHookFunction((void *)&SCNetworkReachabilityGetFlags,
                            (void *)sc_SCNetworkReachabilityGetFlags,
                            (void **)&orig_SCNetworkReachabilityGetFlags);
@@ -816,6 +972,8 @@ static void SCHookPrivateCoreTelephonyIfLoaded(void) {
             void *current = dlsym(sc, "CNCopyCurrentNetworkInfo");
             if (current) MSHookFunction(current, (void *)sc_CNCopyCurrentNetworkInfo, (void **)&orig_CNCopyCurrentNetworkInfo);
         }
+        SCHookNSURLSessionConfigurationProxyIfLoaded();
+        SCHookNetworkExtensionVPNIfLoaded();
         SCHookNEHotspotNetworkIfLoaded();
         SCHookNWPathIfLoaded();
         SCHookNetworkCAPIIfLoaded();

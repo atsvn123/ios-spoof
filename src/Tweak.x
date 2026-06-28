@@ -48,6 +48,12 @@
 #ifndef HW_MEMSIZE
 #define HW_MEMSIZE 24
 #endif
+#ifndef HW_MACHINE
+#define HW_MACHINE 1
+#endif
+#ifndef HW_MODEL
+#define HW_MODEL 2
+#endif
 
 // ============================================================================
 //  iOSSpoof - Tweak.x
@@ -87,6 +93,41 @@ static uint64_t SCRamBytesForPreset(void) {
     if ([pt hasPrefix:@"iPhone15,"]) return 6ULL * 1024ULL * 1024ULL * 1024ULL;
     if ([pt hasPrefix:@"iPhone16,"]) return 8ULL * 1024ULL * 1024ULL * 1024ULL;
     return 6ULL * 1024ULL * 1024ULL * 1024ULL;
+}
+
+static NSOperatingSystemVersion SCFakeOSVersion(void) {
+    NSString *version = CFG().systemVersion.length ? CFG().systemVersion : @"17.5";
+    NSArray<NSString *> *parts = [version componentsSeparatedByString:@"."];
+    NSOperatingSystemVersion v = {17, 5, 0};
+    if (parts.count > 0) v.majorVersion = [parts[0] integerValue];
+    if (parts.count > 1) v.minorVersion = [parts[1] integerValue];
+    if (parts.count > 2) v.patchVersion = [parts[2] integerValue];
+    return v;
+}
+
+static NSDictionary *SCFakeSystemVersionDictionary(void) {
+    NSString *version = CFG().systemVersion.length ? CFG().systemVersion : @"17.5";
+    NSString *build = CFG().buildID.length ? CFG().buildID : @"21F90";
+    return @{
+        @"ProductName": @"iPhone OS",
+        @"ProductVersion": version,
+        @"ProductBuildVersion": build,
+        @"BuildVersion": build
+    };
+}
+
+static BOOL SCIsSystemVersionPlistPath(NSString *path) {
+    return [path isKindOfClass:NSString.class] && [path hasSuffix:@"/System/Library/CoreServices/SystemVersion.plist"];
+}
+
+static NSData *SCFakeSystemVersionPlistData(void) {
+    NSDictionary *dict = SCFakeSystemVersionDictionary();
+    return [NSPropertyListSerialization dataWithPropertyList:dict format:NSPropertyListXMLFormat_v1_0 options:0 error:nil];
+}
+
+static NSUUID *SCFakePasteboardUUID(void) {
+    if (!SC_ON() || !CFG().pasteboardUUID.length) return nil;
+    return [[NSUUID alloc] initWithUUIDString:CFG().pasteboardUUID];
 }
 
 // ----------------------------------------------------------------------------
@@ -261,14 +302,25 @@ static int sc_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
 
 static int (*orig_sysctl)(int *, u_int, void *, size_t *, void *, size_t);
 static int sc_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
-    if (SC_ON() && P() && name && namelen >= 2 && name[0] == CTL_HW && name[1] == HW_MEMSIZE) {
-        uint64_t mem = SCRamBytesForPreset();
-        size_t need = sizeof(mem);
-        if (oldlenp) {
-            if (oldp && *oldlenp >= need) memcpy(oldp, &mem, need);
-            *oldlenp = need;
+    if (SC_ON() && P() && name && namelen >= 2 && name[0] == CTL_HW) {
+        if (name[1] == HW_MEMSIZE) {
+            uint64_t mem = SCRamBytesForPreset();
+            size_t need = sizeof(mem);
+            if (oldlenp) {
+                if (oldp && *oldlenp >= need) memcpy(oldp, &mem, need);
+                *oldlenp = need;
+            }
+            return 0;
         }
-        return 0;
+        if (name[1] == HW_MACHINE || name[1] == HW_MODEL) {
+            const char *val = name[1] == HW_MACHINE ? [P().productType UTF8String] : [P().hardwareModel UTF8String];
+            size_t need = strlen(val) + 1;
+            if (oldlenp) {
+                if (oldp && *oldlenp >= need) memcpy(oldp, val, need);
+                *oldlenp = need;
+            }
+            return 0;
+        }
     }
     return orig_sysctl(name, namelen, oldp, oldlenp, newp, newlen);
 }
@@ -303,14 +355,20 @@ static CFTypeRef sc_IORegistryEntryCreateCFProperty(io_registry_entry_t entry,
             [[NSScanner scannerWithString:CFG().spoofedECID ?: @"0"] scanHexLongLong:&ecid];
             return CFNumberCreate(kCFAllocatorDefault, kCFNumberLongLongType, &ecid);
         }
-        if ([k isEqualToString:@"board-id"]) {
+        if ([k isEqualToString:@"board-id"] || [k isEqualToString:@"BoardId"]) {
             return SCCFDataFromString(P().boardId ?: @"");
         }
-        if ([k isEqualToString:@"product-name"]) {
+        if ([k isEqualToString:@"product-name"] || [k isEqualToString:@"ProductType"] || [k isEqualToString:@"hw.machine"]) {
             return SCCFDataFromString(P().productType ?: @"");
         }
-        if ([k isEqualToString:@"model"]) {
+        if ([k isEqualToString:@"model"] || [k isEqualToString:@"device-model"] || [k isEqualToString:@"hw.model"] || [k isEqualToString:@"HWModel"]) {
             return SCCFDataFromString(P().hardwareModel ?: @"");
+        }
+        if ([k isEqualToString:@"DeviceName"] || [k isEqualToString:@"MarketingName"]) {
+            return (__bridge_retained CFTypeRef)(P().marketingName ?: @"iPhone");
+        }
+        if ([k isEqualToString:@"HardwareModel"] || [k isEqualToString:@"HWModelStr"]) {
+            return (__bridge_retained CFTypeRef)(P().hardwareModel ?: @"D63AP");
         }
         // Bluetooth MAC address
         if ([k isEqualToString:@"BluetoothAddress"] || [k isEqualToString:@"local-address"]) {
@@ -442,6 +500,19 @@ static int sc_statvfs(const char *path, struct statvfs *buf) {
     }
     return %orig;
 }
+- (NSOperatingSystemVersion)operatingSystemVersion {
+    if (SC_ON() && CFG().systemVersion.length) return SCFakeOSVersion();
+    return %orig;
+}
+- (BOOL)isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion)version {
+    if (SC_ON() && CFG().systemVersion.length) {
+        NSOperatingSystemVersion current = SCFakeOSVersion();
+        if (current.majorVersion != version.majorVersion) return current.majorVersion > version.majorVersion;
+        if (current.minorVersion != version.minorVersion) return current.minorVersion > version.minorVersion;
+        return current.patchVersion >= version.patchVersion;
+    }
+    return %orig;
+}
 - (NSProcessInfoThermalState)thermalState {
     if (SC_ON()) return NSProcessInfoThermalStateNominal;
     return %orig;
@@ -569,6 +640,81 @@ static void SCInstallStatusOverlay(UIWindow *window) {
     return d;
 }
 %end
+
+// ============================================================================
+//  4g. Pasteboard UUID fingerprint surface
+// ============================================================================
+
+%hook UIPasteboard
+- (NSUUID *)uniquePasteboardUUID {
+    NSUUID *uuid = SCFakePasteboardUUID();
+    if (uuid) return uuid;
+    return %orig;
+}
+- (id)valueForPasteboardType:(NSString *)pasteboardType {
+    if ([pasteboardType isEqualToString:@"com.apple.uikit.pboard-uuid"]) {
+        NSUUID *uuid = SCFakePasteboardUUID();
+        if (uuid) return [NSKeyedArchiver archivedDataWithRootObject:uuid];
+    }
+    return %orig;
+}
+%end
+
+// ============================================================================
+//  4f. SystemVersion.plist / CoreFoundation version dictionary
+// ============================================================================
+
+%hook NSDictionary
++ (id)dictionaryWithContentsOfFile:(NSString *)path {
+    if (SC_ON() && SCIsSystemVersionPlistPath(path)) return SCFakeSystemVersionDictionary();
+    return %orig;
+}
+- (id)initWithContentsOfFile:(NSString *)path {
+    if (SC_ON() && SCIsSystemVersionPlistPath(path)) return [SCFakeSystemVersionDictionary() copy];
+    return %orig;
+}
+%end
+
+%hook NSData
++ (id)dataWithContentsOfFile:(NSString *)path {
+    if (SC_ON() && SCIsSystemVersionPlistPath(path)) return SCFakeSystemVersionPlistData();
+    return %orig;
+}
+- (id)initWithContentsOfFile:(NSString *)path {
+    if (SC_ON() && SCIsSystemVersionPlistPath(path)) return [SCFakeSystemVersionPlistData() copy];
+    return %orig;
+}
+%end
+
+%hook NSString
++ (id)stringWithContentsOfFile:(NSString *)path encoding:(NSStringEncoding)enc error:(NSError **)error {
+    if (SC_ON() && SCIsSystemVersionPlistPath(path)) {
+        NSData *data = SCFakeSystemVersionPlistData();
+        return [[NSString alloc] initWithData:data encoding:enc ?: NSUTF8StringEncoding];
+    }
+    return %orig;
+}
+- (id)initWithContentsOfFile:(NSString *)path encoding:(NSStringEncoding)enc error:(NSError **)error {
+    if (SC_ON() && SCIsSystemVersionPlistPath(path)) {
+        NSData *data = SCFakeSystemVersionPlistData();
+        return [[NSString alloc] initWithData:data encoding:enc ?: NSUTF8StringEncoding];
+    }
+    return %orig;
+}
+%end
+
+static CFDictionaryRef (*orig_CFCopySystemVersionDictionary)(void);
+static CFDictionaryRef sc_CFCopySystemVersionDictionary(void) {
+    if (SC_ON() && CFG().systemVersion.length) return CFBridgingRetain(SCFakeSystemVersionDictionary());
+    return orig_CFCopySystemVersionDictionary ? orig_CFCopySystemVersionDictionary() : NULL;
+}
+
+static void SCInstallSystemVersionHooks(void) {
+    void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW);
+    if (!cf) return;
+    void *copyDict = dlsym(cf, "CFCopySystemVersionDictionary");
+    if (copyDict) MSHookFunction(copyDict, (void *)sc_CFCopySystemVersionDictionary, (void **)&orig_CFCopySystemVersionDictionary);
+}
 
 // ============================================================================
 //  5. AdSupport - IDFA
@@ -1388,6 +1534,7 @@ static void SCInstallMobileGestaltHooks(void) {
             MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
             MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
             MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
+            SCInstallSystemVersionHooks();
             SCInstallMobileGestaltHooks();
 
             // User-space hide-jailbreak is kept minimal to avoid banking app crashes.

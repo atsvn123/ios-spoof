@@ -82,7 +82,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
 
 - (void)load {
     NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:[self prefsPath]] ?: @{};
-    BOOL needsCellularIdentitySave = !d[@"cellularServiceID"] || !d[@"cellularIPv4"] || !d[@"cellularRouter"];
+    BOOL needsIdentitySave = !d[@"cellularServiceID"] || !d[@"cellularIPv4"] || !d[@"cellularRouter"] || !d[@"pasteboardUUID"];
     self.enabled = [d[@"enabled"] boolValue];
     self.productType = [d[@"productType"] isKindOfClass:NSString.class] ? d[@"productType"] : @"iPhone14,5";
     self.randomizeOnLaunch = [d[@"randomizeOnLaunch"] boolValue];
@@ -128,6 +128,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.systemVersion = d[@"systemVersion"] ?: @"17.5";
     self.buildID = d[@"buildID"] ?: @"21F90";
     self.uniqueID = d[@"uniqueID"] ?: @"";
+    self.pasteboardUUID = d[@"pasteboardUUID"] ?: [[NSUUID UUID] UUIDString];
     self.totalStorage = d[@"totalStorage"] ? [d[@"totalStorage"] unsignedIntegerValue] : 0;
     self.freeStorage = d[@"freeStorage"] ? [d[@"freeStorage"] unsignedIntegerValue] : 0;
     self.lowPowerMode = d[@"lowPowerMode"] ? [d[@"lowPowerMode"] boolValue] : NO;
@@ -140,7 +141,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.timezoneIdentifier = d[@"timezoneIdentifier"] ?: @"";
     self.timestampOffset = d[@"timestampOffset"] ? [d[@"timestampOffset"] doubleValue] : 0;
     self.kernelMode = d[@"kernelMode"] ? [d[@"kernelMode"] boolValue] : NO;
-    if (needsCellularIdentitySave) [self save];
+    if (needsIdentitySave) [self save];
 }
 
 - (void)save {
@@ -189,6 +190,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     d[@"systemVersion"] = self.systemVersion ?: @"17.5";
     d[@"buildID"] = self.buildID ?: @"21F90";
     d[@"uniqueID"] = self.uniqueID ?: @"";
+    d[@"pasteboardUUID"] = self.pasteboardUUID.length ? self.pasteboardUUID : [[NSUUID UUID] UUIDString];
     d[@"totalStorage"] = @(self.totalStorage);
     d[@"freeStorage"] = @(self.freeStorage);
     d[@"lowPowerMode"] = @(self.lowPowerMode);
@@ -279,6 +281,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.cellularIPv4 = SCRandomIPv4Octet(10 + arc4random_uniform(200));
     NSArray *ipParts = [self.cellularIPv4 componentsSeparatedByString:@"."];
     self.cellularRouter = ipParts.count == 4 ? [NSString stringWithFormat:@"%@.%@.%@.1", ipParts[0], ipParts[1], ipParts[2]] : SCRandomIPv4Octet(1);
+    self.pasteboardUUID = [[NSUUID UUID] UUIDString];
     // Auto locale from geo
     NSDictionary *localeInfo = [SCLocaleStore localeForGeo:self.latitude lon:self.longitude];
     if (localeInfo) {

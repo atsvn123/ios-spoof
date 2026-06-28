@@ -61,6 +61,7 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic, copy) NSString *systemVersion;
 @property (nonatomic, copy) NSString *buildID;
 @property (nonatomic, copy) NSString *uniqueID;
+@property (nonatomic, copy) NSString *pasteboardUUID;
 // Storage spoof (GB)
 @property (nonatomic) NSUInteger totalStorage;
 @property (nonatomic) NSUInteger freeStorage;

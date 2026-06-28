@@ -77,6 +77,7 @@
 @property (nonatomic, readonly) BOOL lowPowerMode;
 @property (nonatomic, readonly) NSString *buildID;
 @property (nonatomic, readonly) NSString *uniqueID;
+@property (nonatomic, readonly) NSString *pasteboardUUID;
 @property (nonatomic, readonly) NSString *deviceName;
 
 // Bluetooth

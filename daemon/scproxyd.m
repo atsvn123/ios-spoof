@@ -897,6 +897,9 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
 }
 
 static void sc_control_loop(void) {
+    mkdir("/var/run", 0755);
+    mkdir("/var/jb/var", 0755);
+    mkdir("/var/jb/var/run", 0755);
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) { sc_log(@"control socket failed"); return; }
     unlink(SC_CTL_SOCK); unlink(SC_CTL_SOCK_RL);

@@ -1164,6 +1164,8 @@ static NSSet *sc_protected_bundles(void) {
             return;
         }
 
+        BOOL kernelMode = CFG().kernelMode;
+
         // Đăng ký lắng nghe thay đổi preferences
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
             NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs.changed"), NULL,
@@ -1194,8 +1196,6 @@ static NSSet *sc_protected_bundles(void) {
         // We only keep ObjC hooks (UIDevice, UIScreen, NSProcessInfo, etc.)
         // because ObjC method swizzling cannot be detected by banking apps
         // (they look for MSHookFunction instruction patterns, not ObjC method exchange)
-        BOOL kernelMode = CFG().kernelMode;
-
         if (!kernelMode) {
             // User mode: hook everything ourselves
             MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
@@ -1236,52 +1236,6 @@ static NSSet *sc_protected_bundles(void) {
                 } @catch (__unused id e) {}
             }
         }
-        // In kernel mode: ALL C function hooks handled by systemhook (litehook)
-        // iOSSpoof only keeps ObjC hooks — these use method swizzling,
-        // which banking apps CANNOT detect (no MSHookFunction instruction pattern)
-        // ObjC hooks: UIDevice, UIScreen, NSProcessInfo, NSLocale, NSTimeZone,
-        //             NSCalendar, NSDate, NSURL, NSFileManager, NSMutableURLRequest,
-        //             NSURLSessionConfiguration, UIApplication, UIWindow, NSBundle
-
-        if (!kernelMode) {
-            // User mode: hook everything ourselves
-            MSHookFunction((void *)&access, (void *)sc_access, (void **)&orig_access);
-            MSHookFunction((void *)&stat,  (void *)sc_stat,  (void **)&orig_stat);
-            MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
-            MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
-            MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
-            MSHookFunction((void *)&fopen, (void *)sc_fopen, (void **)&orig_fopen);
-            MSHookFunction((void *)&dlopen,(void *)sc_dlopen,(void **)&orig_dlopen);
-        }
-        // In kernel mode, systemhook handles access/stat/lstat/open/getenv/fopen/dlopen
-
-        // These hooks are unique to iOSSpoof (systemhook does NOT cover them) — always hook
-        MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
-        MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
-        MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
-        MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
-        MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
-        MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
-        MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
-
-        // Anti-detection hooks
-        if (CFG().hideJailbreak && !kernelMode) {
-            // User mode: we handle anti-detection
-            MSHookFunction((void *)&fork, (void *)sc_fork, (void **)&orig_fork);
-            MSHookFunction((void *)&task_for_pid, (void *)sc_task_for_pid, (void **)&orig_task_for_pid);
-            MSHookFunction((void *)&_dyld_image_count, (void *)sc_dyld_image_count, (void **)&orig_dyld_image_count);
-            MSHookFunction((void *)&_dyld_get_image_name, (void *)sc_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
-            MSHookFunction((void *)&csops, (void *)sc_csops, (void **)&orig_csops);
-            MSHookFunction((void *)&proc_pidpath, (void *)sc_proc_pidpath, (void **)&orig_proc_pidpath);
-            MSHookFunction((void *)&proc_name, (void *)sc_proc_name, (void **)&orig_proc_name);
-        }
-        // In kernel mode, systemhook handles: fork, csops, _dyld_image_count, _dyld_get_image_name, access, stat, getenv
-
-        // posix_spawn — only in user mode
-        if (CFG().hideJailbreak && !kernelMode) {
-            @try {
-                MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
-            } @catch (__unused id e) {}
-        }
+        // In kernel mode, all C hooks are handled by roothide systemhook/litehook.
     }
 }

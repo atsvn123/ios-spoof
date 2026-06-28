@@ -24,7 +24,7 @@ iOSSpoof_FRAMEWORKS = UIKit Foundation CoreLocation CoreTelephony SystemConfigur
 iOSSpoof_LDFLAGS = -Wl,-w
 
 iOSSpoof_INSTALL_PATH = /Applications
-iOSSpoof_CODESIGN_FLAGS = -S
+iOSSpoof_CODESIGN_FLAGS = -Sentitlements.plist
 iOSSpoof_INFO_PLIST = Info.plist
 iOSSpoof_RESOURCE_FILES = \
 	Info.plist \

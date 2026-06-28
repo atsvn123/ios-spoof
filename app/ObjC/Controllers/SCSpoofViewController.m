@@ -264,9 +264,11 @@ static void SCUpdateProxyDaemon(SCAppConfig *config) {
     if (i.row == 0) return [self switchCellWithTitle:@"Bật Proxy" on:self.config.proxyEnabled action:@selector(toggleProxy:)];
     if (i.row == 1) {
         NSDictionary *status = SCSendProxyCommand(@{ @"cmd": @"status" });
-        NSString *detail = [status[@"running"] boolValue] ? @"Đang chạy" : @"Đã dừng";
+        BOOL online = [status isKindOfClass:NSDictionary.class];
+        BOOL running = [status[@"running"] boolValue];
+        NSString *detail = online ? (running ? @"Online, proxy đang chạy" : @"Online, proxy đang tắt") : @"Offline";
         UITableViewCell *c = [self cellWithTitle:@"Daemon" detail:detail];
-        c.detailTextLabel.textColor = [status[@"running"] boolValue] ? [UIColor systemGreenColor] : [UIColor systemRedColor];
+        c.detailTextLabel.textColor = online ? (running ? [UIColor systemGreenColor] : [UIColor systemOrangeColor]) : [UIColor systemRedColor];
         return c;
     }
     if (!self.config.proxyEnabled || i.row == 7) {

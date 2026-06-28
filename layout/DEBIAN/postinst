@@ -10,4 +10,16 @@ for app in "$APP_ROOTLESS" "$APP_VIRTUAL"; do
     fi
 done
 
+DAEMON_PLIST="/Library/LaunchDaemons/com.iosspoof.scproxyd.plist"
+DAEMON_LABEL="system/com.iosspoof.scproxyd"
+
+if [ -f "$DAEMON_PLIST" ]; then
+    chmod 644 "$DAEMON_PLIST" >/dev/null 2>&1 || true
+    chown root:wheel "$DAEMON_PLIST" >/dev/null 2>&1 || true
+    mkdir -p /var/jb/var/run /var/run >/dev/null 2>&1 || true
+    launchctl bootout system "$DAEMON_PLIST" >/dev/null 2>&1 || true
+    launchctl bootstrap system "$DAEMON_PLIST" >/dev/null 2>&1 || true
+    launchctl kickstart -k "$DAEMON_LABEL" >/dev/null 2>&1 || true
+fi
+
 exit 0

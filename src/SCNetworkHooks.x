@@ -4,6 +4,7 @@
 #import <SystemConfiguration/SystemConfiguration.h>
 #import <CFNetwork/CFNetwork.h>
 #import <netinet/in.h>
+#import <arpa/inet.h>
 #import <ifaddrs.h>
 #import <net/if.h>
 #import <netdb.h>
@@ -11,6 +12,11 @@
 #import <dlfcn.h>
 #import <substrate.h>
 #import <string.h>
+
+typedef const void * nw_path_t;
+typedef const void * nw_interface_t;
+typedef int32_t nw_path_status_t;
+typedef int32_t nw_interface_type_t;
 
 // iOS 17 SDKs used by CI may not expose CoreTelephony headers. We only need
 // Objective-C selectors for Logos hooks, so forward declarations are enough.
@@ -50,6 +56,39 @@
 static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 static SCDevicePreset *P()  { return CFG().resolvedPreset; }
 static BOOL SC_ON()         { return CFG().enabled; }
+
+static BOOL SCCellularMode(void) { return SC_ON() && CFG().networkMode == 2; }
+static BOOL SCWiFiMode(void)     { return SC_ON() && CFG().networkMode == 1; }
+
+static BOOL SCIsWiFiInterfaceName(const char *name) {
+    return name && (!strcmp(name, "en0") || !strncmp(name, "awdl", 4) || !strncmp(name, "llw", 3));
+}
+
+static BOOL SCIsCellularInterfaceName(const char *name) {
+    return name && (!strncmp(name, "pdp_ip", 6) || !strncmp(name, "ipsec", 5));
+}
+
+static NSDictionary *SCCellularIPv4Dictionary(void) {
+    NSString *serviceID = CFG().cellularServiceID.length ? CFG().cellularServiceID : @"00000000-0000-0000-0000-000000000000";
+    NSString *address = CFG().cellularIPv4.length ? CFG().cellularIPv4 : @"10.23.42.10";
+    NSString *router = CFG().cellularRouter.length ? CFG().cellularRouter : @"10.23.42.1";
+    return @{
+        @"PrimaryInterface": @"pdp_ip0",
+        @"PrimaryService": serviceID,
+        @"InterfaceName": @"pdp_ip0",
+        @"Addresses": @[ address ],
+        @"SubnetMasks": @[ @"255.255.255.255" ],
+        @"Router": router,
+        @"ConfigMethod": @"DHCP",
+        @"ConfirmedInterfaceName": @"pdp_ip0"
+    };
+}
+
+static void SCSetSockaddrIPv4(struct sockaddr *addr, const char *ip) {
+    if (!addr || addr->sa_family != AF_INET || !ip) return;
+    struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+    inet_pton(AF_INET, ip, &sin->sin_addr);
+}
 
 static NSString *SCFakeSSID(void) {
     return CFG().wifiSSID.length ? CFG().wifiSSID : @"MyWiFi";
@@ -184,6 +223,33 @@ CFArrayRef sc_CFNetworkCopyProxiesForURL(CFURLRef url, CFDictionaryRef settings)
 
 CFPropertyListRef (*orig_SCDynamicStoreCopyValue)(SCDynamicStoreRef, CFStringRef);
 CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key) {
+    if (SC_ON() && key) {
+        NSString *k = (__bridge NSString *)key;
+        if (SCCellularMode()) {
+            if ([k containsString:@"State:/Network/Global/IPv4"]) {
+                return CFBridgingRetain(SCCellularIPv4Dictionary());
+            }
+            if (([k containsString:@"State:/Network/Service"] && [k containsString:@"/IPv4"]) ||
+                [k containsString:@"State:/Network/Interface/pdp_ip0/IPv4"]) {
+                return CFBridgingRetain(SCCellularIPv4Dictionary());
+            }
+            if ([k containsString:@"State:/Network/Interface/en0"] ||
+                [k containsString:@"State:/Network/Interface/awdl"] ||
+                [k containsString:@"State:/Network/Interface/llw"] ||
+                [k containsString:@"Setup:/Network/Interface/en0"] ||
+                [k containsString:@"Setup:/Network/Interface/awdl"] ||
+                [k containsString:@"Setup:/Network/Interface/llw"] ||
+                ([k containsString:@"State:/Network/Service"] && [k containsString:@"/IPv4"] && [k containsString:@"en0"])) {
+                return NULL;
+            }
+        } else if (SCWiFiMode()) {
+            if ([k containsString:@"State:/Network/Interface/pdp_ip"] ||
+                [k containsString:@"Setup:/Network/Interface/pdp_ip"]) {
+                return NULL;
+            }
+        }
+    }
+
     if (SC_ON() && CFG().hideProxy && key) {
         NSString *k = (__bridge NSString *)key;
         // ẩn HTTP proxy, HTTPS proxy, SOCKS, auto proxy
@@ -204,6 +270,25 @@ CFPropertyListRef sc_SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRe
 CFArrayRef (*orig_SCDynamicStoreCopyKeyList)(SCDynamicStoreRef, CFStringRef);
 CFArrayRef sc_SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef pattern) {
     CFArrayRef r = orig_SCDynamicStoreCopyKeyList(store, pattern);
+    if (SC_ON() && r) {
+        NSMutableArray *filtered = [NSMutableArray array];
+        for (id item in (__bridge NSArray *)r) {
+            NSString *key = [item isKindOfClass:NSString.class] ? item : [item description];
+            BOOL drop = NO;
+            if (SCCellularMode()) {
+                drop = [key containsString:@"Interface/en0"] || [key containsString:@"Interface/awdl"] ||
+                       [key containsString:@"Interface/llw"] || [key containsString:@"AirPort"] ||
+                       [key containsString:@"Wi-Fi"] || [key containsString:@"Wifi"];
+            } else if (SCWiFiMode()) {
+                drop = [key containsString:@"Interface/pdp_ip"];
+            }
+            if (!drop) [filtered addObject:item];
+        }
+        if (filtered.count != CFArrayGetCount(r)) {
+            CFRelease(r);
+            return CFBridgingRetain(filtered);
+        }
+    }
     if (SC_ON() && CFG().hideProxy && r && pattern) {
         NSString *p = (__bridge NSString *)pattern;
         if ([p containsString:@"Proxy"] || [p containsString:@"proxy"]) {
@@ -227,23 +312,33 @@ int (*orig_getifaddrs)(struct ifaddrs **);
 int sc_getifaddrs(struct ifaddrs **ifap) {
     int r = orig_getifaddrs(ifap);
     if (r != 0 || !ifap || !*ifap) return r;
-    if (!SC_ON() || !CFG().hideVPN) return r;
+    if (!SC_ON()) return r;
 
-    // Danh sách prefix interface cần ẩn
-    NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif",
-                              @"stf", @"bridge"];
     struct ifaddrs *cur = *ifap;
     while (cur) {
         char *name = cur->ifa_name;
-        NSString *n = [NSString stringWithUTF8String:name];
-        BOOL hide = NO;
-        for (NSString *pre in hidePrefixes) {
-            if ([n hasPrefix:pre]) { hide = YES; break; }
+        if (SCCellularMode()) {
+            if (SCIsWiFiInterfaceName(name)) {
+                strlcpy(cur->ifa_name, "pdp_ip0", IFNAMSIZ);
+                NSString *cellIP = CFG().cellularIPv4.length ? CFG().cellularIPv4 : @"10.23.42.10";
+                NSString *routerIP = CFG().cellularRouter.length ? CFG().cellularRouter : @"10.23.42.1";
+                SCSetSockaddrIPv4(cur->ifa_addr, [cellIP UTF8String]);
+                SCSetSockaddrIPv4(cur->ifa_netmask, "255.255.255.255");
+                SCSetSockaddrIPv4(cur->ifa_dstaddr, [routerIP UTF8String]);
+            }
+        } else if (SCWiFiMode()) {
+            if (SCIsCellularInterfaceName(name)) {
+                strlcpy(cur->ifa_name, "en0", IFNAMSIZ);
+            }
         }
-        if (hide) {
-            // Avoid unlinking nodes because callers will free the original list.
-            // Renaming is enough for common VPN/proxy interface checks.
-            strlcpy(cur->ifa_name, "lo0", IFNAMSIZ);
+
+        if (CFG().hideVPN) {
+            NSString *n = [NSString stringWithUTF8String:cur->ifa_name ? cur->ifa_name : ""];
+            NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif",
+                                      @"stf", @"bridge"];
+            for (NSString *pre in hidePrefixes) {
+                if ([n hasPrefix:pre]) { strlcpy(cur->ifa_name, "lo0", IFNAMSIZ); break; }
+            }
         }
         cur = cur->ifa_next;
     }
@@ -256,6 +351,16 @@ int sc_getifaddrs(struct ifaddrs **ifap) {
 
 unsigned int (*orig_if_nametoindex)(const char *);
 unsigned int sc_if_nametoindex(const char *ifname) {
+    if (SCCellularMode() && SCIsWiFiInterfaceName(ifname)) {
+        unsigned int idx = orig_if_nametoindex("pdp_ip0");
+        if (idx) return idx;
+        return 0;
+    }
+    if (SCWiFiMode() && SCIsCellularInterfaceName(ifname)) {
+        unsigned int idx = orig_if_nametoindex("en0");
+        if (idx) return idx;
+        return 0;
+    }
     if (SC_ON() && CFG().hideVPN && ifname) {
         NSString *n = [NSString stringWithUTF8String:ifname];
         NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif"];
@@ -269,6 +374,14 @@ unsigned int sc_if_nametoindex(const char *ifname) {
 char *(*orig_if_indextoname)(unsigned int, char *);
 char *sc_if_indextoname(unsigned int ifindex, char *ifname) {
     char *r = orig_if_indextoname(ifindex, ifname);
+    if (r && SCCellularMode() && SCIsWiFiInterfaceName(r)) {
+        strlcpy(ifname, "pdp_ip0", IFNAMSIZ);
+        return ifname;
+    }
+    if (r && SCWiFiMode() && SCIsCellularInterfaceName(r)) {
+        strlcpy(ifname, "en0", IFNAMSIZ);
+        return ifname;
+    }
     if (r && SC_ON() && CFG().hideVPN) {
         NSString *n = [NSString stringWithUTF8String:r];
         NSArray *hidePrefixes = @[@"utun", @"ppp", @"ipsec", @"tap", @"tun", @"gif"];
@@ -456,6 +569,72 @@ static void SCHookNWPathIfLoaded(void) {
     }
 }
 
+// Network.framework C API used by Swift NWPathMonitor.
+// Swift's NWPath.usesInterfaceType(.cellular) commonly reaches these C symbols,
+// not the private ObjC selectors above.
+static nw_path_status_t (*orig_nw_path_get_status)(nw_path_t);
+static nw_path_status_t sc_nw_path_get_status(nw_path_t path) {
+    if (SC_ON()) return 1; // nw_path_status_satisfied
+    return orig_nw_path_get_status ? orig_nw_path_get_status(path) : 1;
+}
+
+static bool (*orig_nw_path_is_expensive)(nw_path_t);
+static bool sc_nw_path_is_expensive(nw_path_t path) {
+    if (SCCellularMode()) return true;
+    if (SCWiFiMode()) return false;
+    return orig_nw_path_is_expensive ? orig_nw_path_is_expensive(path) : false;
+}
+
+static bool (*orig_nw_path_is_constrained)(nw_path_t);
+static bool sc_nw_path_is_constrained(nw_path_t path) {
+    if (SC_ON()) return false;
+    return orig_nw_path_is_constrained ? orig_nw_path_is_constrained(path) : false;
+}
+
+static bool (*orig_nw_path_uses_interface_type)(nw_path_t, nw_interface_type_t);
+static bool sc_nw_path_uses_interface_type(nw_path_t path, nw_interface_type_t type) {
+    if (SCCellularMode()) {
+        if (type == 2) return true;  // cellular
+        if (type == 1) return false; // wifi
+    } else if (SCWiFiMode()) {
+        if (type == 1) return true;
+        if (type == 2) return false;
+    }
+    return orig_nw_path_uses_interface_type ? orig_nw_path_uses_interface_type(path, type) : false;
+}
+
+static nw_interface_type_t (*orig_nw_interface_get_type)(nw_interface_t);
+static nw_interface_type_t sc_nw_interface_get_type(nw_interface_t interface) {
+    if (SCCellularMode()) return 2;
+    if (SCWiFiMode()) return 1;
+    return orig_nw_interface_get_type ? orig_nw_interface_get_type(interface) : 0;
+}
+
+static const char *(*orig_nw_interface_get_name)(nw_interface_t);
+static const char *sc_nw_interface_get_name(nw_interface_t interface) {
+    if (SCCellularMode()) return "pdp_ip0";
+    if (SCWiFiMode()) return "en0";
+    return orig_nw_interface_get_name ? orig_nw_interface_get_name(interface) : NULL;
+}
+
+static void SCHookNetworkCAPIIfLoaded(void) {
+    void *nw = dlopen("/System/Library/Frameworks/Network.framework/Network", RTLD_NOW);
+    if (!nw) return;
+
+    void *sym = dlsym(nw, "nw_path_get_status");
+    if (sym) MSHookFunction(sym, (void *)sc_nw_path_get_status, (void **)&orig_nw_path_get_status);
+    sym = dlsym(nw, "nw_path_is_expensive");
+    if (sym) MSHookFunction(sym, (void *)sc_nw_path_is_expensive, (void **)&orig_nw_path_is_expensive);
+    sym = dlsym(nw, "nw_path_is_constrained");
+    if (sym) MSHookFunction(sym, (void *)sc_nw_path_is_constrained, (void **)&orig_nw_path_is_constrained);
+    sym = dlsym(nw, "nw_path_uses_interface_type");
+    if (sym) MSHookFunction(sym, (void *)sc_nw_path_uses_interface_type, (void **)&orig_nw_path_uses_interface_type);
+    sym = dlsym(nw, "nw_interface_get_type");
+    if (sym) MSHookFunction(sym, (void *)sc_nw_interface_get_type, (void **)&orig_nw_interface_get_type);
+    sym = dlsym(nw, "nw_interface_get_name");
+    if (sym) MSHookFunction(sym, (void *)sc_nw_interface_get_name, (void **)&orig_nw_interface_get_name);
+}
+
 // ============================================================================
 //  7. res_query / DNS - tránh leak (DNS resolve vẫn hoạt động nhưng không lộ proxy)
 //    DNS leak chủ yếu qua getaddrinfo -> hook để không trả về interface VPN.
@@ -527,5 +706,6 @@ static void SCHookNWPathIfLoaded(void) {
         }
         SCHookNEHotspotNetworkIfLoaded();
         SCHookNWPathIfLoaded();
+        SCHookNetworkCAPIIfLoaded();
     }
 }

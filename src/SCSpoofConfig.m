@@ -7,7 +7,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 #define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
-@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; }
+@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_cellularServiceID; NSString *_cellularIPv4; NSString *_cellularRouter; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; }
 @end
 
 @implementation SCSpoofConfig
@@ -92,6 +92,9 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _networkMode = d[@"networkMode"] ? [d[@"networkMode"] integerValue] : 0;
     _wifiSSID = SC_READ_STR(@"wifiSSID") ?: @"MyWiFi";
     _wifiBSSID = SC_READ_STR(@"wifiBSSID") ?: @"02:00:00:00:00:00";
+    _cellularServiceID = SC_READ_STR(@"cellularServiceID") ?: @"00000000-0000-0000-0000-000000000000";
+    _cellularIPv4 = SC_READ_STR(@"cellularIPv4") ?: @"10.23.42.10";
+    _cellularRouter = SC_READ_STR(@"cellularRouter") ?: @"10.23.42.1";
     _systemVersion = SC_READ_STR(@"systemVersion") ?: @"17.5";
     _totalStorage = d[@"totalStorage"] ? [d[@"totalStorage"] unsignedIntegerValue] : 0;
     _freeStorage = d[@"freeStorage"] ? [d[@"freeStorage"] unsignedIntegerValue] : 0;
@@ -257,6 +260,9 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (NSInteger)networkMode { return _networkMode; }
 - (NSString *)wifiSSID { return _wifiSSID; }
 - (NSString *)wifiBSSID { return _wifiBSSID; }
+- (NSString *)cellularServiceID { return _cellularServiceID; }
+- (NSString *)cellularIPv4 { return _cellularIPv4; }
+- (NSString *)cellularRouter { return _cellularRouter; }
 - (NSString *)systemVersion { return _systemVersion; }
 - (NSUInteger)totalStorage { return _totalStorage; }
 - (NSUInteger)freeStorage { return _freeStorage; }

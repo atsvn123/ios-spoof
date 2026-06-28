@@ -63,6 +63,9 @@
 @property (nonatomic, readonly) NSInteger networkMode;
 @property (nonatomic, readonly) NSString *wifiSSID;
 @property (nonatomic, readonly) NSString *wifiBSSID;
+@property (nonatomic, readonly) NSString *cellularServiceID;
+@property (nonatomic, readonly) NSString *cellularIPv4;
+@property (nonatomic, readonly) NSString *cellularRouter;
 // iOS version spoof
 @property (nonatomic, readonly) NSString *systemVersion;
 // Storage spoof (GB)

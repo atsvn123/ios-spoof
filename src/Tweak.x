@@ -1212,9 +1212,7 @@ static NSSet *sc_protected_bundles(void) {
             MSHookFunction((void *)&stat,  (void *)sc_stat,  (void **)&orig_stat);
             MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
             MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
-            MSHookFunction((void *)&getenv,(void *)sc_getenv,(void **)&orig_getenv);
             MSHookFunction((void *)&fopen, (void *)sc_fopen, (void **)&orig_fopen);
-            MSHookFunction((void *)&dlopen,(void *)sc_dlopen,(void **)&orig_dlopen);
             MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
             MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
             MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
@@ -1223,18 +1221,9 @@ static NSSet *sc_protected_bundles(void) {
             MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
             MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
 
-            if (CFG().hideJailbreak) {
-                MSHookFunction((void *)&fork, (void *)sc_fork, (void **)&orig_fork);
-                MSHookFunction((void *)&task_for_pid, (void *)sc_task_for_pid, (void **)&orig_task_for_pid);
-                MSHookFunction((void *)&_dyld_image_count, (void *)sc_dyld_image_count, (void **)&orig_dyld_image_count);
-                MSHookFunction((void *)&_dyld_get_image_name, (void *)sc_dyld_get_image_name, (void **)&orig_dyld_get_image_name);
-                MSHookFunction((void *)&csops, (void *)sc_csops, (void **)&orig_csops);
-                MSHookFunction((void *)&proc_pidpath, (void *)sc_proc_pidpath, (void **)&orig_proc_pidpath);
-                MSHookFunction((void *)&proc_name, (void *)sc_proc_name, (void **)&orig_proc_name);
-                @try {
-                    MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
-                } @catch (__unused id e) {}
-            }
+            // User-space mode intentionally avoids high-risk anti-debug/process hooks
+            // (getenv, dlopen, fork, task_for_pid, csops, dyld, proc, posix_spawn).
+            // Those are handled only by roothide systemhook in Kernel-Level mode.
         }
         // In kernel mode, all C hooks are handled by roothide systemhook/litehook.
     }

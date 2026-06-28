@@ -7,12 +7,25 @@
 
 NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.changed";
 
+static NSString *SCRandomIPv4Octet(NSInteger base) {
+    return [NSString stringWithFormat:@"10.%u.%u.%ld", arc4random_uniform(200) + 20, arc4random_uniform(250) + 1, (long)base];
+}
+
 @implementation SCAppConfig
 
 + (BOOL)systemhookInstalled {
     // Check if custom roothide with iOSSpoof systemhook is installed
     // Look for the env var set by iosspoof_system_init()
     if (getenv("SC_SYSTEMHOOK_ACTIVE")) return YES;
+
+    NSArray *markers = @[
+        @"/var/mobile/Library/Preferences/com.iosspoof.systemhook.active",
+        @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.systemhook.active",
+    ];
+    for (NSString *marker in markers) {
+        if ([[NSFileManager defaultManager] fileExistsAtPath:marker]) return YES;
+    }
+
     // Check if systemhook.dylib exists and contains iosspoof_system_init symbol
     void *handle = dlopen("/usr/lib/systemhook.dylib", RTLD_NOLOAD);
     if (handle) {
@@ -21,12 +34,20 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     // Also check jbroot path
     NSArray *paths = @[
         @"/var/jb/usr/lib/systemhook.dylib",
+        @"/var/jb/basebin/systemhook.dylib",
+        @"/basebin/systemhook.dylib",
         @"/usr/lib/systemhook.dylib",
     ];
     for (NSString *p in paths) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:p]) {
             void *h = dlopen([p UTF8String], RTLD_NOLOAD);
             if (h && dlsym(h, "iosspoof_system_init")) return YES;
+
+            NSData *data = [NSData dataWithContentsOfFile:p options:NSDataReadingMappedIfSafe error:nil];
+            if (data.length > 0) {
+                NSData *needle = [@"iosspoof_system_init" dataUsingEncoding:NSUTF8StringEncoding];
+                if ([data rangeOfData:needle options:0 range:NSMakeRange(0, data.length)].location != NSNotFound) return YES;
+            }
         }
     }
     return NO;
@@ -55,6 +76,7 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
 
 - (void)load {
     NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:[self prefsPath]] ?: @{};
+    BOOL needsCellularIdentitySave = !d[@"cellularServiceID"] || !d[@"cellularIPv4"] || !d[@"cellularRouter"];
     self.enabled = [d[@"enabled"] boolValue];
     self.productType = [d[@"productType"] isKindOfClass:NSString.class] ? d[@"productType"] : @"iPhone14,5";
     self.randomizeOnLaunch = [d[@"randomizeOnLaunch"] boolValue];
@@ -86,6 +108,10 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.networkMode = d[@"networkMode"] ? [d[@"networkMode"] integerValue] : 0;
     self.wifiSSID = d[@"wifiSSID"] ?: @"MyWiFi";
     self.wifiBSSID = d[@"wifiBSSID"] ?: @"02:00:00:00:00:00";
+    self.cellularServiceID = d[@"cellularServiceID"] ?: [[NSUUID UUID] UUIDString];
+    self.cellularIPv4 = d[@"cellularIPv4"] ?: SCRandomIPv4Octet(10);
+    NSArray *parts = [self.cellularIPv4 componentsSeparatedByString:@"."];
+    self.cellularRouter = d[@"cellularRouter"] ?: (parts.count == 4 ? [NSString stringWithFormat:@"%@.%@.%@.1", parts[0], parts[1], parts[2]] : SCRandomIPv4Octet(1));
     self.phoneNumber = d[@"phoneNumber"] ?: @"";
     self.geoFromIP = d[@"geoFromIP"] ? [d[@"geoFromIP"] boolValue] : NO;
     self.geoIPCity = d[@"geoIPCity"] ?: @"";
@@ -106,6 +132,7 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.timezoneIdentifier = d[@"timezoneIdentifier"] ?: @"";
     self.timestampOffset = d[@"timestampOffset"] ? [d[@"timestampOffset"] doubleValue] : 0;
     self.kernelMode = d[@"kernelMode"] ? [d[@"kernelMode"] boolValue] : NO;
+    if (needsCellularIdentitySave) [self save];
 }
 
 - (void)save {
@@ -141,6 +168,9 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     d[@"networkMode"] = @(self.networkMode);
     d[@"wifiSSID"] = self.wifiSSID ?: @"MyWiFi";
     d[@"wifiBSSID"] = self.wifiBSSID ?: @"02:00:00:00:00:00";
+    d[@"cellularServiceID"] = self.cellularServiceID.length ? self.cellularServiceID : [[NSUUID UUID] UUIDString];
+    d[@"cellularIPv4"] = self.cellularIPv4.length ? self.cellularIPv4 : SCRandomIPv4Octet(10);
+    d[@"cellularRouter"] = self.cellularRouter.length ? self.cellularRouter : SCRandomIPv4Octet(1);
     d[@"phoneNumber"] = self.phoneNumber ?: @"";
     d[@"geoFromIP"] = @(self.geoFromIP);
     d[@"geoIPCity"] = self.geoIPCity ?: @"";
@@ -232,6 +262,10 @@ NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.c
     self.bluetoothDeviceName = btNames[arc4random_uniform((uint32_t)btNames.count)];
     self.bluetoothConnected = YES;
     self.signalStrength = 3 + arc4random_uniform(2);
+    self.cellularServiceID = [[NSUUID UUID] UUIDString];
+    self.cellularIPv4 = SCRandomIPv4Octet(10 + arc4random_uniform(200));
+    NSArray *ipParts = [self.cellularIPv4 componentsSeparatedByString:@"."];
+    self.cellularRouter = ipParts.count == 4 ? [NSString stringWithFormat:@"%@.%@.%@.1", ipParts[0], ipParts[1], ipParts[2]] : SCRandomIPv4Octet(1);
     // Auto locale from geo
     NSDictionary *localeInfo = [SCLocaleStore localeForGeo:self.latitude lon:self.longitude];
     if (localeInfo) {

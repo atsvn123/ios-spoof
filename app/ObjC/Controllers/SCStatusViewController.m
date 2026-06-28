@@ -37,7 +37,7 @@
         case 1: return 14; // Device info
         case 2: return 4;  // Carrier
         case 3: return 6;  // GPS
-        case 4: return 3;  // Network mode
+        case 4: return 6;  // Network mode
         case 5: return 9;  // System spoof
         case 6: return 4;  // Bluetooth & Signal
         case 7: return 3;  // Locale & Timezone
@@ -89,7 +89,10 @@
             NSString *mode = self.config.networkMode == 1 ? @"WiFi (ảo)" : (self.config.networkMode == 2 ? @"Cellular (fake)" : @"Mặc định");
             if (i.row == 0) return [self cellWithTitle:@"Network Mode" detail:mode];
             if (i.row == 1) return [self cellWithTitle:@"WiFi SSID" detail:self.config.wifiSSID];
-            return [self cellWithTitle:@"WiFi BSSID" detail:self.config.wifiBSSID];
+            if (i.row == 2) return [self cellWithTitle:@"WiFi BSSID" detail:self.config.wifiBSSID];
+            if (i.row == 3) return [self cellWithTitle:@"Cell Service" detail:self.config.cellularServiceID];
+            if (i.row == 4) return [self cellWithTitle:@"Cell IPv4" detail:self.config.cellularIPv4];
+            return [self cellWithTitle:@"Cell Router" detail:self.config.cellularRouter];
         }
         case 5: {
             switch (i.row) {

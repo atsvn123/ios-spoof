@@ -42,6 +42,10 @@ extern NSString * const SCPreferencesChangedNotification;
 // Virtual WiFi BSSID/SSID
 @property (nonatomic, copy) NSString *wifiSSID;
 @property (nonatomic, copy) NSString *wifiBSSID;
+// Virtual cellular network identity
+@property (nonatomic, copy) NSString *cellularServiceID;
+@property (nonatomic, copy) NSString *cellularIPv4;
+@property (nonatomic, copy) NSString *cellularRouter;
 // Phone number spoof
 @property (nonatomic, copy) NSString *phoneNumber;
 // Geo from IP

@@ -209,6 +209,7 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
 
 - (void)resetAll {
     self.enabled = NO;
+    self.kernelMode = NO;
     self.productType = @"iPhone14,5";
     self.randomizeOnLaunch = NO;
     self.targetBundles = @[];
@@ -224,6 +225,7 @@ static NSString *SCRandomIPv4Octet(NSInteger base) {
     self.productType = preset[@"productType"];
     self.randomizeOnLaunch = YES;
     self.enabled = YES;
+    self.kernelMode = NO;
     self.geoEnabled = YES;
     self.carrierName = preset[@"carrierName"];
     self.carrierMCC = preset[@"carrierMCC"];

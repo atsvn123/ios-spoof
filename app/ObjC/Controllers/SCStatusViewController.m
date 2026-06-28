@@ -147,6 +147,17 @@
 
 - (void)toggleEnabled:(UISwitch *)sw { self.config.enabled = sw.on; [self.config save]; }
 - (void)toggleKernelMode:(UISwitch *)sw {
+    if (sw.on && self.config.targetBundles.count == 0) {
+        sw.on = NO;
+        self.config.kernelMode = NO;
+        [self.config save];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Cần chọn app"
+                                                                       message:@"Kernel-Level Spoof không chạy global. Hãy chọn target app trước để tránh hook vào process hệ thống."
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
     self.config.kernelMode = sw.on;
     [self.config save];
     [self.tableView reloadData];

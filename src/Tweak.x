@@ -1206,25 +1206,6 @@ static void SCInjectWebKitScript(WKWebViewConfiguration *configuration) {
     configuration.applicationNameForUserAgent = @"Mobile/15E148";
 }
 
-#if IOS_SPOOF_ENABLE_WEBKIT_HOOKS
-%hook WKWebView
-- (instancetype)initWithFrame:(CGRect)frame configuration:(WKWebViewConfiguration *)configuration {
-    SCInjectWebKitScript(configuration);
-    WKWebView *webView = %orig(frame, configuration);
-    if (SC_ON() && P()) webView.customUserAgent = SCWebKitUserAgent();
-    return webView;
-}
-- (void)setCustomUserAgent:(NSString *)customUserAgent {
-    if (SC_ON() && P()) { %orig(SCWebKitUserAgent()); return; }
-    %orig;
-}
-- (NSString *)customUserAgent {
-    if (SC_ON() && P()) return SCWebKitUserAgent();
-    return %orig;
-}
-%end
-#endif
-
 // ============================================================================
 // MobileGestalt — private Apple source for Settings/About and many capabilities
 // ============================================================================

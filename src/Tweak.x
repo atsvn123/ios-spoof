@@ -1353,11 +1353,6 @@ static void SCInstallMobileGestaltHooks(void) {
                                (void **)&orig_IORegistryEntryCreateCFProperty);
             }
 
-            MSHookFunction((void *)&access, (void *)sc_access, (void **)&orig_access);
-            MSHookFunction((void *)&stat,  (void *)sc_stat,  (void **)&orig_stat);
-            MSHookFunction((void *)&lstat, (void *)sc_lstat, (void **)&orig_lstat);
-            MSHookFunction((void *)&open,  (void *)sc_open,  (void **)&orig_open);
-            MSHookFunction((void *)&fopen, (void *)sc_fopen, (void **)&orig_fopen);
             MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
             MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
             MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
@@ -1367,9 +1362,8 @@ static void SCInstallMobileGestaltHooks(void) {
             MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
             SCInstallMobileGestaltHooks();
 
-            // User-space mode intentionally avoids high-risk anti-debug/process hooks
-            // (getenv, dlopen, fork, task_for_pid, csops, dyld, proc, posix_spawn).
-            // Those are handled only by roothide systemhook in Kernel-Level mode.
+            // User-space hide-jailbreak is kept minimal to avoid banking app crashes.
+            // Path/process anti-detect belongs in roothide systemhook kernel mode.
         }
         // In kernel mode, all C hooks are handled by roothide systemhook/litehook.
     }

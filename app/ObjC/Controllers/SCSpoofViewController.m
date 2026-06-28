@@ -2,6 +2,51 @@
 #import "../Models/SCAppConfig.h"
 #import "../Models/SCDevicePresetStore.h"
 #import "../Models/SCLocaleStore.h"
+#import <sys/socket.h>
+#import <sys/un.h>
+#import <unistd.h>
+#import <arpa/inet.h>
+
+static NSDictionary *SCSendProxyCommand(NSDictionary *cmd) {
+    const char *paths[] = { "/var/jb/var/run/scproxyd.sock", "/var/run/scproxyd.sock", NULL };
+    for (int i = 0; paths[i]; i++) {
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) continue;
+        struct sockaddr_un addr = {0};
+        addr.sun_family = AF_UNIX;
+        strlcpy(addr.sun_path, paths[i], sizeof(addr.sun_path));
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); continue; }
+        NSData *d = [NSJSONSerialization dataWithJSONObject:cmd options:0 error:nil];
+        if (!d) { close(fd); return nil; }
+        uint32_t len = htonl((uint32_t)d.length);
+        if (send(fd, &len, 4, 0) != 4 || send(fd, d.bytes, d.length, 0) != (ssize_t)d.length) { close(fd); return nil; }
+        uint32_t rlen = 0;
+        if (recv(fd, &rlen, 4, 0) != 4) { close(fd); return nil; }
+        rlen = ntohl(rlen);
+        NSMutableData *buf = [NSMutableData dataWithLength:rlen];
+        ssize_t got = recv(fd, buf.mutableBytes, rlen, 0);
+        close(fd);
+        if (got <= 0) return nil;
+        return [NSJSONSerialization JSONObjectWithData:buf options:0 error:nil];
+    }
+    return nil;
+}
+
+static void SCUpdateProxyDaemon(SCAppConfig *config) {
+    if (!config.proxyEnabled) {
+        SCSendProxyCommand(@{ @"cmd": @"stop" });
+        return;
+    }
+    SCSendProxyCommand(@{
+        @"cmd": @"start",
+        @"type": config.proxyType ?: @"socks5",
+        @"host": config.proxyHost ?: @"",
+        @"port": @(config.proxyPort),
+        @"user": config.proxyUser ?: @"",
+        @"pass": config.proxyPass ?: @"",
+        @"udp": @(config.proxyUDP)
+    });
+}
 
 @interface SCGPSSearchViewController : UITableViewController <UISearchBarDelegate>
 @property (nonatomic, strong) UISearchBar *searchBar;
@@ -130,7 +175,7 @@
         case 0: return self.config.networkMode == 2 ? 2 : 4;
         case 1: return self.config.proxyEnabled ? 7 : 2;
         case 2: return [self gpsRowCount];
-        case 3: return 1 + 5 + (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
+        case 3: return (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
         case 4: return 5;
         case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
         case 6: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
@@ -163,7 +208,7 @@
         case 0: return [self networkModeCell:i];
         case 1: return [self proxyCell:i];
         case 2: return [self gpsCell:i];
-        case 3: return i.row <= 5 ? (i.row == 0 ? [self carrierPresetCell] : [self carrierCell:i]) : [self simCell:i];
+        case 3: return [self simCell:i];
         case 4: return [self antiDetectCell:i];
         case 5: return [self systemCell:i];
         case 6: return [self bluetoothCell:i];
@@ -232,7 +277,12 @@
     return c;
 }
 
-- (void)toggleProxy:(UISwitch *)s { self.config.proxyEnabled = s.on; [self.config save]; [self.tableView reloadData]; }
+- (void)toggleProxy:(UISwitch *)s {
+    self.config.proxyEnabled = s.on;
+    [self.config save];
+    SCUpdateProxyDaemon(self.config);
+    [self.tableView reloadData];
+}
 
 #pragma mark - GPS
 
@@ -325,7 +375,7 @@
 }
 
 - (UITableViewCell *)simCell:(NSIndexPath *)i {
-    NSInteger simStart = 6;
+    NSInteger simStart = 0;
     NSInteger simRows = self.config.simSlots.count * 7;
     if (i.row == simStart + simRows) {
         UITableViewCell *c = [self cellWithTitle:@"Thêm SIM" detail:@"Thêm Sim 2/eSIM"];
@@ -374,8 +424,7 @@
         [self.navigationController pushViewController:vc animated:YES];
         return;
     }
-    if (i.section == 3 && i.row == 0) { [self showCarrierPresets]; return; }
-    if (i.section == 3 && i.row >= 6) { [self handleSIMRow:i]; return; }
+    if (i.section == 3) { [self handleSIMRow:i]; return; }
     if (i.section == 0 && i.row == 3) { [self randomBSSID]; return; }
     if (i.section == 5) { [self showSystemPicker:i.row]; return; }
     if (i.section == 6 && i.row == 0) { [self randomBluetoothMAC]; return; }
@@ -807,12 +856,15 @@
         case 4: self.config.spoofBattery = s.on; break;
     }
     [self.config save];
+    if (self.config.proxyEnabled) {
+        SCUpdateProxyDaemon(self.config);
+    }
 }
 
 - (void)toggleSimESIM:(UISwitch *)s {
     NSInteger idx = s.tag - 880;
     NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
-    while (slots.count < 2) [slots addObject:@{}];
+    while (slots.count <= idx) [slots addObject:@{}];
     NSMutableDictionary *sim = [NSMutableDictionary dictionaryWithDictionary:slots[idx]];
     sim[@"eSIM"] = @(s.on);
     sim[@"enabled"] = @YES;
@@ -824,15 +876,15 @@
 - (void)toggleActiveSIM:(UISwitch *)s {
     CGPoint p = [s convertPoint:CGPointZero toView:self.tableView];
     NSIndexPath *i = [self.tableView indexPathForRowAtPoint:p];
-    if (!i || i.section != 3 || i.row < 6) return;
-    NSInteger idx = (i.row - 6) / 7;
+    if (!i || i.section != 3) return;
+    NSInteger idx = i.row / 7;
     self.config.activeSIMIndex = idx;
     [self.config save];
     [self.tableView reloadData];
 }
 
 - (void)handleSIMRow:(NSIndexPath *)i {
-    NSInteger simStart = 6;
+    NSInteger simStart = 0;
     NSInteger simRows = self.config.simSlots.count * 7;
     if (i.row == simStart + simRows && self.config.simSlots.count < 2) {
         NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
@@ -887,7 +939,7 @@
                         NSInteger idx = (t.tag - 810) / 10;
                         NSInteger field = (t.tag - 810) % 10;
                         NSMutableArray *slots = [NSMutableArray arrayWithArray:self.config.simSlots ?: @[]];
-                        while (slots.count < 2) [slots addObject:@{}];
+                        while (slots.count <= idx) [slots addObject:@{}];
                         NSMutableDictionary *sim = [NSMutableDictionary dictionaryWithDictionary:slots[idx]];
                         NSArray *keys = @[@"phoneNumber", @"carrierName", @"carrierMCC", @"carrierMNC"];
                         if (field < (NSInteger)keys.count) sim[keys[field]] = t.text ?: @"";

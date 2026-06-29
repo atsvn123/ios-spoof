@@ -39,6 +39,7 @@ extern NSString * const SCPreferencesChangedNotification;
 @property (nonatomic) BOOL spoofIDFA;
 @property (nonatomic) BOOL spoofIDFV;
 @property (nonatomic) BOOL spoofBattery;
+@property (nonatomic) BOOL spoofWebKit;
 
 // Network mode: 0=default, 1=wifi, 2=cellular
 @property (nonatomic) NSInteger networkMode;

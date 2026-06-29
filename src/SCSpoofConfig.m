@@ -7,7 +7,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 #define SC_READ_STR(k)         [d objectForKey:k] ? ([[d objectForKey:k] isKindOfClass:[NSString class]] ? [d objectForKey:k] : [[d objectForKey:k] stringValue]) : nil
 #define SC_READ_DBL(k)         [d objectForKey:k] ? [[d objectForKey:k] doubleValue] : 0.0
 
-@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSArray<NSDictionary *> *_simSlots; NSInteger _activeSIMIndex; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_cellularServiceID; NSString *_cellularIPv4; NSString *_cellularRouter; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_pasteboardUUID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; }
+@interface SCSpoofConfig () { NSDictionary *_raw; SCDevicePreset *_resolved; NSString *_bundleID; NSString *_udid, *_serial, *_ecid, *_imei, *_mac, *_idfa; NSArray<NSDictionary *> *_simSlots; NSInteger _activeSIMIndex; NSInteger _networkMode; NSString *_wifiSSID; NSString *_wifiBSSID; NSString *_cellularServiceID; NSString *_cellularIPv4; NSString *_cellularRouter; NSString *_systemVersion; NSUInteger _totalStorage; NSUInteger _freeStorage; BOOL _lowPowerMode; NSString *_buildID; NSString *_uniqueID; NSString *_pasteboardUUID; NSString *_deviceName; NSString *_bluetoothMAC; NSString *_bluetoothDeviceName; BOOL _bluetoothConnected; NSInteger _signalStrength; NSString *_localeIdentifier; NSString *_timezoneIdentifier; NSTimeInterval _timestampOffset; BOOL _kernelMode; BOOL _spoofWebKit; }
 @end
 
 @implementation SCSpoofConfig
@@ -90,6 +90,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _spoofIDFA = SC_READ_BOOL_DEF(@"spoofIDFA", YES);
     _spoofIDFV = SC_READ_BOOL_DEF(@"spoofIDFV", YES);
     _spoofBattery = SC_READ_BOOL_DEF(@"spoofBattery", YES);
+    _spoofWebKit = SC_READ_BOOL_DEF(@"spoofWebKit", NO);
 
     _networkMode = d[@"networkMode"] ? [d[@"networkMode"] integerValue] : 0;
     _wifiSSID = SC_READ_STR(@"wifiSSID") ?: @"MyWiFi";
@@ -225,7 +226,8 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 
     NSString *proc = [[NSProcessInfo processInfo] processName] ?: @"";
     BOOL isWebKitHelper = [_bundleID hasPrefix:@"com.apple.WebKit"] || [proc hasPrefix:@"com.apple.WebKit"] || [proc containsString:@"WebContent"] || [proc containsString:@"Networking"];
-    if (isWebKitHelper && _enabled) {
+    if (isWebKitHelper) {
+        if (!_enabled || !_spoofWebKit) return NO;
         if (_targetBundles.count == 0) return YES;
         for (NSString *target in _targetBundles) {
             if ([target isKindOfClass:[NSString class]] && ([target isEqualToString:@"com.apple.mobilesafari"] || [target isEqualToString:@"com.apple.SafariViewService"])) {
@@ -283,5 +285,6 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
 - (NSString *)timezoneIdentifier { return _timezoneIdentifier; }
 - (NSTimeInterval)timestampOffset { return _timestampOffset; }
 - (BOOL)kernelMode { return _kernelMode; }
+- (BOOL)spoofWebKit { return _spoofWebKit; }
 
 @end

@@ -60,6 +60,7 @@
 @property (nonatomic, readonly) BOOL spoofIDFA;
 @property (nonatomic, readonly) BOOL spoofIDFV;
 @property (nonatomic, readonly) BOOL spoofBattery;
+@property (nonatomic, readonly) BOOL spoofWebKit;
 
 // Network mode: 0=default, 1=wifi, 2=cellular
 @property (nonatomic, readonly) NSInteger networkMode;

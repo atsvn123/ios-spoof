@@ -189,20 +189,26 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
     [self.tableView reloadData];
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self saveVisibleFields];
+}
+
 #pragma mark - Table
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 8; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)t { return 9; }
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
-        case 0: return self.config.networkMode == 2 ? 2 : 4;
-        case 1: return 10;
-        case 2: return [self gpsRowCount];
-        case 3: return (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
-        case 4: return 5;
-        case 5: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
-        case 6: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
-        case 7: return 4; // Locale, Timezone, Timestamp offset, Sync from Geo
+        case 0: return 2;
+        case 1: return self.config.networkMode == 2 ? 2 : 4;
+        case 2: return 10;
+        case 3: return [self gpsRowCount];
+        case 4: return (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
+        case 5: return 5;
+        case 6: return 5; // iOS Version, Total Storage, Free Storage, Low Power, IDFA
+        case 7: return 4; // Bluetooth MAC, BT Device, BT Connected, Signal
+        case 8: return 4; // Locale, Timezone, Timestamp offset, Sync from Geo
         default: return 0;
     }
 }
@@ -213,34 +219,47 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
 }
 
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    return @[@"Network Mode", @"Proxy", @"GPS Location", @"Carrier", @"Anti-Detect", @"System & Storage", @"Bluetooth & Signal", @"Locale & Timezone"][s];
+    return @[@"Device", @"Network Mode", @"Proxy", @"GPS Location", @"Carrier", @"Anti-Detect", @"System & Storage", @"Bluetooth & Signal", @"Locale & Timezone"][s];
 }
 
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     switch (s) {
-        case 0: return self.config.networkMode == 2 ? @"Cellular: app thấy 4G/5G thay WiFi." : @"WiFi: app thấy đang dùng WiFi (có thể spoof SSID).";
-        case 1: return self.config.proxyStealthMode ? @"Stealth mode thử PF/divert transparent path. Nếu IP không đổi, quay về Compat vì PF/divert chưa ổn trên thiết bị này." : @"Compat mode: set system proxy để IP đổi chắc hơn, tweak sẽ ẩn proxy/VPN APIs khỏi app mục tiêu.";
-        case 2: return self.config.geoFromIP ? @"Đang lấy vị trí từ IP. Nhập thủ công đã tắt." : @"Nhập tọa độ thủ công hoặc tìm kiếm địa điểm.";
-        case 3: return @"Chọn preset hoặc nhập thủ công.";
+        case 0: return @"Spoof WebKit tắt thì không can thiệp UA/navigator/canvas/audio/WebRTC trong WebKit.";
+        case 1: return self.config.networkMode == 2 ? @"Cellular: app thấy 4G/5G thay WiFi." : @"WiFi: app thấy đang dùng WiFi (có thể spoof SSID).";
+        case 2: return self.config.proxyStealthMode ? @"Stealth mode thử PF/divert transparent path. Nếu IP không đổi, quay về Compat vì PF/divert chưa ổn trên thiết bị này." : @"Compat mode: set system proxy để IP đổi chắc hơn, tweak sẽ ẩn proxy/VPN APIs khỏi app mục tiêu.";
+        case 3: return self.config.geoFromIP ? @"Đang lấy vị trí từ IP. Nhập thủ công đã tắt." : @"Nhập tọa độ thủ công hoặc tìm kiếm địa điểm.";
+        case 4: return @"Chọn preset hoặc nhập thủ công.";
         default: return @"";
     }
 }
 
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)i {
     switch (i.section) {
-        case 0: return [self networkModeCell:i];
-        case 1: return [self proxyCell:i];
-        case 2: return [self gpsCell:i];
-        case 3: return [self simCell:i];
-        case 4: return [self antiDetectCell:i];
-        case 5: return [self systemCell:i];
-        case 6: return [self bluetoothCell:i];
-        case 7: return [self localeCell:i];
+        case 0: return [self deviceCell:i];
+        case 1: return [self networkModeCell:i];
+        case 2: return [self proxyCell:i];
+        case 3: return [self gpsCell:i];
+        case 4: return [self simCell:i];
+        case 5: return [self antiDetectCell:i];
+        case 6: return [self systemCell:i];
+        case 7: return [self bluetoothCell:i];
+        case 8: return [self localeCell:i];
     }
     return [self cellWithTitle:@"" detail:@""];
 }
 
 #pragma mark - Network Mode
+
+- (UITableViewCell *)deviceCell:(NSIndexPath *)i {
+    if (i.row == 0) {
+        UITableViewCell *c = [self cellWithTitle:@"Device Name" detail:nil];
+        c.accessoryView = [self textFieldWithText:self.config.deviceName placeholder:@"iPhone" tag:400 keyboard:UIKeyboardTypeDefault];
+        return c;
+    }
+    return [self switchCellWithTitle:@"Spoof WebKit" on:self.config.spoofWebKit action:@selector(toggleSpoofWebKit:)];
+}
+
+- (void)toggleSpoofWebKit:(UISwitch *)s { self.config.spoofWebKit = s.on; [self.config save]; }
 
 - (UITableViewCell *)networkModeCell:(NSIndexPath *)i {
     if (i.row == 0) {
@@ -481,9 +500,9 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)i {
     [t deselectRowAtIndexPath:i animated:YES];
     [self dismissKeyboard];
-    if (i.section == 1 && i.row == 8) { [self checkProxy]; return; }
-    if (i.section == 1 && i.row == 9) { [self clearProxySetting]; return; }
-    if (i.section == 2 && !self.config.geoFromIP && i.row == 1) {
+    if (i.section == 2 && i.row == 8) { [self checkProxy]; return; }
+    if (i.section == 2 && i.row == 9) { [self clearProxySetting]; return; }
+    if (i.section == 3 && !self.config.geoFromIP && i.row == 1) {
         SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
         vc.selectionHandler = ^(double latitude, double longitude) {
             self.config.latitude = latitude;
@@ -495,16 +514,16 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
         [self.navigationController pushViewController:vc animated:YES];
         return;
     }
-    if (i.section == 3) { [self handleSIMRow:i]; return; }
-    if (i.section == 0 && i.row == 3) { [self randomBSSID]; return; }
-    if (i.section == 5) { [self showSystemPicker:i.row]; return; }
-    if (i.section == 6 && i.row == 0) { [self randomBluetoothMAC]; return; }
-    if (i.section == 6 && i.row == 1) { [self randomBluetoothDevice]; return; }
-    if (i.section == 6 && i.row == 3) { [self showSignalPicker]; return; }
-    if (i.section == 7 && i.row == 0) { [self showLocalePicker]; return; }
-    if (i.section == 7 && i.row == 1) { [self showTimezonePicker]; return; }
-    if (i.section == 7 && i.row == 2) { [self showTimestampPicker]; return; }
-    if (i.section == 7 && i.row == 3) { [self syncLocaleFromGeo]; return; }
+    if (i.section == 4) { [self handleSIMRow:i]; return; }
+    if (i.section == 1 && i.row == 3) { [self randomBSSID]; return; }
+    if (i.section == 6) { [self showSystemPicker:i.row]; return; }
+    if (i.section == 7 && i.row == 0) { [self randomBluetoothMAC]; return; }
+    if (i.section == 7 && i.row == 1) { [self randomBluetoothDevice]; return; }
+    if (i.section == 7 && i.row == 3) { [self showSignalPicker]; return; }
+    if (i.section == 8 && i.row == 0) { [self showLocalePicker]; return; }
+    if (i.section == 8 && i.row == 1) { [self showTimezonePicker]; return; }
+    if (i.section == 8 && i.row == 2) { [self showTimestampPicker]; return; }
+    if (i.section == 8 && i.row == 3) { [self syncLocaleFromGeo]; return; }
 }
 
 - (void)randomBSSID {
@@ -719,7 +738,7 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
     if (self.config.proxyEnabled && proxyFieldsChanged) {
         SCUpdateProxyDaemon(self.config);
     }
-    NSIndexPath *ip = [NSIndexPath indexPathForRow:8 inSection:1];
+    NSIndexPath *ip = [NSIndexPath indexPathForRow:8 inSection:2];
     UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:ip];
     cell.detailTextLabel.text = @"Checking...";
     NSURL *url = [NSURL URLWithString:@"https://ipwho.is/"];
@@ -1022,6 +1041,7 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
         if ([c.accessoryView isKindOfClass:UITextField.class]) {
             UITextField *t = (id)c.accessoryView;
             switch (t.tag / 100) {
+                case 4: if (t.tag==400) self.config.deviceName=t.text; break;
                 case 5: if (t.tag==500) self.config.wifiSSID=t.text; break;
                 case 6: proxyFieldsSeen = YES; if (t.tag==603) self.config.proxyType=t.text; if (t.tag==604) self.config.proxyHost=t.text; if (t.tag==605) self.config.proxyPort=t.text.integerValue; if (t.tag==606) self.config.proxyUser=t.text; if (t.tag==607) self.config.proxyPass=t.text; break;
                 case 7: if (t.tag==702) self.config.latitude=t.text.doubleValue; if (t.tag==703) self.config.longitude=t.text.doubleValue; if (t.tag==704) self.config.altitude=t.text.doubleValue; if (t.tag==705) self.config.horizontalAccuracy=t.text.doubleValue; if (t.tag==706) self.config.heading=t.text.doubleValue; break;

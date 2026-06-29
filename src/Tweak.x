@@ -68,6 +68,7 @@
 static SCSpoofConfig *CFG() { return [SCSpoofConfig shared]; }
 static SCDevicePreset *P()  { return CFG().resolvedPreset; }
 static BOOL SC_ON()         { return CFG().enabled; }
+static BOOL SC_WEBKIT_ON()  { return SC_ON() && CFG().spoofWebKit; }
 
 static unsigned long long SCFakeTotalBytes(void) {
     NSUInteger gb = CFG().totalStorage;
@@ -672,7 +673,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 
 %hook NSMutableURLRequest
 - (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
-    if (SC_ON() && [field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
+    if (SC_WEBKIT_ON() && [field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
         %orig(SCNativeUserAgent(), field);
         return;
     }
@@ -685,7 +686,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 - (void)setAllHTTPHeaderFields:(NSDictionary<NSString *,NSString *> *)headerFields {
     if (SC_ON()) {
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:headerFields ?: @{}];
-        m[@"User-Agent"] = SCNativeUserAgent();
+        if (SC_WEBKIT_ON()) m[@"User-Agent"] = SCNativeUserAgent();
         m[@"Accept-Language"] = SCAcceptLanguageHeader();
         %orig(m);
         return;
@@ -699,7 +700,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
     NSDictionary *d = %orig;
     if (SC_ON()) {
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
-        m[@"User-Agent"] = SCNativeUserAgent();
+        if (SC_WEBKIT_ON()) m[@"User-Agent"] = SCNativeUserAgent();
         m[@"Accept-Language"] = SCAcceptLanguageHeader();
         return m;
     }
@@ -713,7 +714,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
     if (SC_ON() && CFG().systemVersion) {
         NSString *ua = SCNativeUserAgent();
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
-        m[@"User-Agent"] = ua;
+        if (SC_WEBKIT_ON()) m[@"User-Agent"] = ua;
         m[@"Accept-Language"] = SCAcceptLanguageHeader();
         return [m copy];
     }
@@ -1523,7 +1524,7 @@ static NSString *SCWebKitSpoofScript(void) {
 }
 
 static void SCInjectWebKitScript(WKWebViewConfiguration *configuration) {
-    if (!SC_ON() || !P() || !configuration) return;
+    if (!SC_WEBKIT_ON() || !P() || !configuration) return;
     Class scriptClass = NSClassFromString(@"WKUserScript");
     Class controllerClass = NSClassFromString(@"WKUserContentController");
     if (!scriptClass || !controllerClass) return;
@@ -1539,7 +1540,7 @@ static id (*orig_WKWebView_initWithFrame_configuration)(id, SEL, CGRect, WKWebVi
 static id sc_WKWebView_initWithFrame_configuration(id self, SEL _cmd, CGRect frame, WKWebViewConfiguration *configuration) {
     SCInjectWebKitScript(configuration);
     id obj = orig_WKWebView_initWithFrame_configuration ? orig_WKWebView_initWithFrame_configuration(self, _cmd, frame, configuration) : self;
-    if (SC_ON() && [obj respondsToSelector:@selector(setCustomUserAgent:)]) {
+    if (SC_WEBKIT_ON() && [obj respondsToSelector:@selector(setCustomUserAgent:)]) {
         ((void (*)(id, SEL, NSString *))objc_msgSend)(obj, @selector(setCustomUserAgent:), SCWebKitUserAgent());
     }
     return obj;
@@ -1547,19 +1548,19 @@ static id sc_WKWebView_initWithFrame_configuration(id self, SEL _cmd, CGRect fra
 
 static void (*orig_WKWebView_setCustomUserAgent)(id, SEL, NSString *);
 static void sc_WKWebView_setCustomUserAgent(id self, SEL _cmd, NSString *ua) {
-    NSString *fake = SC_ON() ? SCWebKitUserAgent() : ua;
+    NSString *fake = SC_WEBKIT_ON() ? SCWebKitUserAgent() : ua;
     if (orig_WKWebView_setCustomUserAgent) orig_WKWebView_setCustomUserAgent(self, _cmd, fake);
 }
 
 static NSString *(*orig_WKWebView_customUserAgent)(id, SEL);
 static NSString *sc_WKWebView_customUserAgent(id self, SEL _cmd) {
-    if (SC_ON()) return SCWebKitUserAgent();
+    if (SC_WEBKIT_ON()) return SCWebKitUserAgent();
     return orig_WKWebView_customUserAgent ? orig_WKWebView_customUserAgent(self, _cmd) : nil;
 }
 
 static void (*orig_WKWebViewConfiguration_setApplicationNameForUserAgent)(id, SEL, NSString *);
 static void sc_WKWebViewConfiguration_setApplicationNameForUserAgent(id self, SEL _cmd, NSString *name) {
-    NSString *fake = SC_ON() ? @"Mobile/15E148" : name;
+    NSString *fake = SC_WEBKIT_ON() ? @"Mobile/15E148" : name;
     if (orig_WKWebViewConfiguration_setApplicationNameForUserAgent) orig_WKWebViewConfiguration_setApplicationNameForUserAgent(self, _cmd, fake);
 }
 
@@ -1571,13 +1572,13 @@ static void sc_WKWebViewConfiguration_setUserContentController(id self, SEL _cmd
 
 static NSString *(*orig_SFUserAgent_string)(id, SEL);
 static NSString *sc_SFUserAgent_string(id self, SEL _cmd) {
-    if (SC_ON()) return SCWebKitUserAgent();
+    if (SC_WEBKIT_ON()) return SCWebKitUserAgent();
     return orig_SFUserAgent_string ? orig_SFUserAgent_string(self, _cmd) : nil;
 }
 
 static NSString *(*orig_SFUserAgent_domain)(id, SEL, id);
 static NSString *sc_SFUserAgent_domain(id self, SEL _cmd, id domain) {
-    if (SC_ON()) return SCWebKitUserAgent();
+    if (SC_WEBKIT_ON()) return SCWebKitUserAgent();
     return orig_SFUserAgent_domain ? orig_SFUserAgent_domain(self, _cmd, domain) : nil;
 }
 

@@ -114,6 +114,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.spoofIDFA = d[@"spoofIDFA"] ? [d[@"spoofIDFA"] boolValue] : YES;
     self.spoofIDFV = d[@"spoofIDFV"] ? [d[@"spoofIDFV"] boolValue] : YES;
     self.spoofBattery = d[@"spoofBattery"] ? [d[@"spoofBattery"] boolValue] : YES;
+    self.spoofWebKit = d[@"spoofWebKit"] ? [d[@"spoofWebKit"] boolValue] : NO;
     self.networkMode = d[@"networkMode"] ? [d[@"networkMode"] integerValue] : 0;
     self.wifiSSID = d[@"wifiSSID"] ?: @"MyWiFi";
     self.wifiBSSID = d[@"wifiBSSID"] ?: @"02:00:00:00:00:00";
@@ -178,6 +179,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     d[@"spoofIDFA"] = @(self.spoofIDFA);
     d[@"spoofIDFV"] = @(self.spoofIDFV);
     d[@"spoofBattery"] = @(self.spoofBattery);
+    d[@"spoofWebKit"] = @(self.spoofWebKit);
     d[@"networkMode"] = @(self.networkMode);
     d[@"wifiSSID"] = self.wifiSSID ?: @"MyWiFi";
     d[@"wifiBSSID"] = self.wifiBSSID ?: @"02:00:00:00:00:00";
@@ -231,6 +233,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.proxyEnabled = NO;
     self.hideProxy = self.hideVPN = self.hideJailbreak = YES;
     self.spoofIDFA = self.spoofIDFV = self.spoofBattery = YES;
+    self.spoofWebKit = NO;
     [self save];
 }
 
@@ -259,6 +262,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.heading = arc4random_uniform(360);
     self.hideProxy = self.hideVPN = self.hideJailbreak = YES;
     self.spoofIDFA = self.spoofIDFV = self.spoofBattery = YES;
+    self.spoofWebKit = NO;
     // Auto storage from preset
     NSArray *storageOpts = [SCDevicePresetStore storageOptionsForProductType:preset[@"productType"]];
     self.totalStorage = [storageOpts[arc4random_uniform((uint32_t)storageOpts.count)] unsignedIntegerValue];

@@ -1458,8 +1458,6 @@ static NSString *SCWebKitSpoofScript(void) {
     NSInteger height = P().screenHeight / scale;
     NSString *locale = SCEffectiveLanguageTag();
     NSString *tz = SCEffectiveTimezoneIdentifier();
-    NSString *platform = @"iPhone";
-    NSString *ua = SCWebKitUserAgent();
     double lat = CFG().latitude;
     double lon = CFG().longitude;
     double acc = CFG().horizontalAccuracy > 0 ? CFG().horizontalAccuracy : 5.0;
@@ -1474,22 +1472,20 @@ static NSString *SCWebKitSpoofScript(void) {
         seed ^= bytes[idx];
         seed *= 16777619u;
     }
-    NSInteger memoryGB = (NSInteger)MAX((uint64_t)1, SCRamBytesForPreset() / 1024ULL / 1024ULL / 1024ULL);
     NSString *gpuVendor = @"Apple Inc.";
     NSString *gpuRenderer = [NSString stringWithFormat:@"Apple GPU (%@)", P().chipId ?: @"A-series"];
     return [NSString stringWithFormat:
         @"(()=>{"
          "if(window.__iosspoof_fp_installed)return;window.__iosspoof_fp_installed=1;"
-         "const def=(o,k,v)=>{try{Object.defineProperty(o,k,{get:()=>v,configurable:true});}catch(e){}};"
+         "const nativeToString=Function.prototype.toString;const nativeMap=new WeakMap();"
+         "const maskNative=(fn,name)=>{try{nativeMap.set(fn,`function ${name||fn.name||''}() { [native code] }`);}catch(e){}};"
+         "const spoofToString=function(){try{if(nativeMap.has(this))return nativeMap.get(this);}catch(e){}return nativeToString.call(this);};maskNative(spoofToString,'toString');try{Object.defineProperty(Function.prototype,'toString',{value:spoofToString,writable:true,configurable:true});}catch(e){}"
+         "const def=(o,k,v)=>{try{const old=Object.getOwnPropertyDescriptor(o,k);const g=function(){return v;};maskNative(g,'get '+k);Object.defineProperty(o,k,{get:g,enumerable:old?old.enumerable:true,configurable:true});}catch(e){}};"
          "const seed=%u>>>0;"
          "const hash=(s)=>{let h=seed;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;};"
          "const unit=(s)=>((hash(s)%%10000)/10000);"
          "const offset=(s,m)=>((unit(s)*2)-1)*m;"
-         "const maskNative=(fn,name)=>{try{Object.defineProperty(fn,'toString',{value:()=>`function ${name||fn.name||''}() { [native code] }`,configurable:true});}catch(e){}};"
-         "def(navigator,'userAgent','%@');def(navigator,'platform','%@');def(navigator,'language','%@');def(navigator,'languages',['%@','en-US','en']);"
-          "def(navigator,'hardwareConcurrency',6);def(navigator,'maxTouchPoints',5);def(navigator,'deviceMemory',%ld);def(navigator,'webdriver',false);"
           "def(screen,'width',%ld);def(screen,'height',%ld);def(screen,'availWidth',%ld);def(screen,'availHeight',%ld);def(window,'devicePixelRatio',%.1f);"
-         "try{Object.defineProperty(navigator,'languages',{value:Object.freeze(['%@','en-US','en']),configurable:true});}catch(e){}"
           "if(navigator.permissions&&navigator.permissions.query){const pq=navigator.permissions.query.bind(navigator.permissions);navigator.permissions.query=function(p){if(p&&p.name==='geolocation')return Promise.resolve({state:'granted',onchange:null});return pq(p);};maskNative(navigator.permissions.query,'query');}"
           "const ro=Intl.DateTimeFormat.prototype.resolvedOptions;Intl.DateTimeFormat.prototype.resolvedOptions=function(){const r=ro.call(this);r.timeZone='%@';r.locale='%@';return r;};"
           "maskNative(Intl.DateTimeFormat.prototype.resolvedOptions,'resolvedOptions');"
@@ -1497,17 +1493,17 @@ static NSString *SCWebKitSpoofScript(void) {
          "if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices){const ed=navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);navigator.mediaDevices.enumerateDevices=()=>Promise.resolve([]);maskNative(navigator.mediaDevices.enumerateDevices,'enumerateDevices');}"
          "if(navigator.geolocation){const geo={coords:{latitude:%0.8f,longitude:%0.8f,accuracy:%0.2f,altitude:%0.2f,altitudeAccuracy:%0.2f,heading:%0.2f,speed:0},timestamp:Date.now()};const gcp=(s,e,o)=>setTimeout(()=>s&&s(geo),0);const gwp=(s,e,o)=>{gcp(s,e,o);return 1;};navigator.geolocation.getCurrentPosition=gcp;navigator.geolocation.watchPosition=gwp;navigator.geolocation.clearWatch=()=>{};maskNative(navigator.geolocation.getCurrentPosition,'getCurrentPosition');maskNative(navigator.geolocation.watchPosition,'watchPosition');maskNative(navigator.geolocation.clearWatch,'clearWatch');}"
          "const toDataURL=HTMLCanvasElement.prototype.toDataURL;"
-         "maskNative(toDataURL,'toDataURL');"
-         "HTMLCanvasElement.prototype.toDataURL=function(...args){const c=this.cloneNode(true);c.width=this.width;c.height=this.height;const x=c.getContext('2d');try{x.drawImage(this,0,0);const p=x.getImageData(0,0,Math.min(c.width,32),Math.min(c.height,32));for(let i=0;i<p.data.length;i+=16){p.data[i]=Math.max(0,Math.min(255,p.data[i]+Math.round(offset('c'+i,3))));}x.putImageData(p,0,0);}catch(e){}return toDataURL.apply(c,args);};"
+         "HTMLCanvasElement.prototype.toDataURL=function toDataURL(...args){const c=this.cloneNode(true);c.width=this.width;c.height=this.height;const x=c.getContext('2d');try{x.drawImage(this,0,0);const p=x.getImageData(0,0,Math.min(c.width,32),Math.min(c.height,32));for(let i=0;i<p.data.length;i+=16){p.data[i]=Math.max(0,Math.min(255,p.data[i]+Math.round(offset('c'+i,3))));}x.putImageData(p,0,0);}catch(e){}return toDataURL.apply(c,args);};"
+         "maskNative(HTMLCanvasElement.prototype.toDataURL,'toDataURL');"
          "const toBlob=HTMLCanvasElement.prototype.toBlob;"
-         "if(toBlob){HTMLCanvasElement.prototype.toBlob=function(cb,type,q){const url=this.toDataURL(type,q);const b=atob(url.split(',')[1]||'');const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);cb(new Blob([a],{type:type||'image/png'}));};}"
+         "if(toBlob){HTMLCanvasElement.prototype.toBlob=function toBlob(cb,type,q){const url=this.toDataURL(type,q);const b=atob(url.split(',')[1]||'');const a=new Uint8Array(b.length);for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);cb(new Blob([a],{type:type||'image/png'}));};}"
          "if(toBlob)maskNative(HTMLCanvasElement.prototype.toBlob,'toBlob');"
          "const gi=CanvasRenderingContext2D.prototype.getImageData;"
-         "maskNative(gi,'getImageData');"
-         "CanvasRenderingContext2D.prototype.getImageData=function(x,y,w,h){const d=gi.call(this,x,y,w,h);for(let i=0;i<d.data.length;i+=64){d.data[i]=Math.max(0,Math.min(255,d.data[i]+Math.round(offset('g'+i,2))));}return d;};"
+         "CanvasRenderingContext2D.prototype.getImageData=function getImageData(x,y,w,h){const d=gi.call(this,x,y,w,h);for(let i=0;i<d.data.length;i+=64){d.data[i]=Math.max(0,Math.min(255,d.data[i]+Math.round(offset('g'+i,2))));}return d;};"
+         "maskNative(CanvasRenderingContext2D.prototype.getImageData,'getImageData');"
          "const mt=CanvasRenderingContext2D.prototype.measureText;"
-         "maskNative(mt,'measureText');"
-         "CanvasRenderingContext2D.prototype.measureText=function(t){const r=mt.call(this,t);try{Object.defineProperty(r,'width',{value:r.width+offset('m'+String(t),0.12),configurable:true});}catch(e){}return r;};"
+         "CanvasRenderingContext2D.prototype.measureText=function measureText(t){const r=mt.call(this,t);try{Object.defineProperty(r,'width',{value:r.width+offset('m'+String(t),0.12),configurable:true});}catch(e){}return r;};"
+         "maskNative(CanvasRenderingContext2D.prototype.measureText,'measureText');"
          "const patchGL=(proto)=>{if(!proto)return;const gp=proto.getParameter;proto.getParameter=function(p){if(p===37445)return '%@';if(p===37446)return '%@';if(p===3379)return 16384;if(p===36347||p===36348)return 16;return gp.call(this,p);};maskNative(proto.getParameter,'getParameter');const rp=proto.readPixels;proto.readPixels=function(...args){const out=args[6];const ret=rp.apply(this,args);if(out&&typeof out.length==='number'){for(let i=0;i<Math.min(out.length,64);i+=11){out[i]=Math.max(0,Math.min(255,out[i]+Math.round(offset('w'+i,1))));}}return ret;};maskNative(proto.readPixels,'readPixels');const ge=proto.getSupportedExtensions; if(ge){proto.getSupportedExtensions=function(){const ex=ge.call(this)||[];return Array.from(new Set(ex.concat(['WEBGL_debug_renderer_info']))).sort();};maskNative(proto.getSupportedExtensions,'getSupportedExtensions');}const sp=proto.getShaderPrecisionFormat;if(sp){proto.getShaderPrecisionFormat=function(...args){const r=sp.apply(this,args);if(r){try{Object.defineProperty(r,'precision',{value:(r.precision||23)+1,configurable:true});}catch(e){}}return r;};maskNative(proto.getShaderPrecisionFormat,'getShaderPrecisionFormat');}};"
          "patchGL(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);patchGL(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);"
           "if(window.OffscreenCanvas&&OffscreenCanvas.prototype&&OffscreenCanvas.prototype.convertToBlob){const ctb=OffscreenCanvas.prototype.convertToBlob;OffscreenCanvas.prototype.convertToBlob=function(...args){return ctb.apply(this,args);};maskNative(OffscreenCanvas.prototype.convertToBlob,'convertToBlob');}"
@@ -1520,7 +1516,7 @@ static NSString *SCWebKitSpoofScript(void) {
           "if(window.AnalyserNode&&AnalyserNode.prototype.getFloatFrequencyData){const gffd=AnalyserNode.prototype.getFloatFrequencyData;AnalyserNode.prototype.getFloatFrequencyData=function(arr){const r=gffd.call(this,arr);for(let i=0;i<Math.min(arr.length,64);i+=13){arr[i]=arr[i]+offset('f'+i,0.015);}return r;};maskNative(AnalyserNode.prototype.getFloatFrequencyData,'getFloatFrequencyData');}"
           "if(window.AudioContext&&AudioContext.prototype){def(AudioContext.prototype,'sampleRate',48000);}if(window.webkitAudioContext&&webkitAudioContext.prototype){def(webkitAudioContext.prototype,'sampleRate',48000);}"
           "})();",
-         seed, ua, platform, locale, locale, (long)memoryGB, (long)width, (long)height, (long)width, (long)height, scale, locale, tz, locale, (long)-tzOffsetMinutes, lat, lon, acc, alt, acc, heading, gpuVendor, gpuRenderer, gpuRenderer, gpuRenderer];
+         seed, (long)width, (long)height, (long)width, (long)height, scale, tz, locale, (long)-tzOffsetMinutes, lat, lon, acc, alt, acc, heading, gpuVendor, gpuRenderer, gpuRenderer, gpuRenderer];
 }
 
 static void SCInjectWebKitScript(WKWebViewConfiguration *configuration) {
@@ -1533,7 +1529,6 @@ static void SCInjectWebKitScript(WKWebViewConfiguration *configuration) {
     if (![scriptClass instancesRespondToSelector:initSel]) return;
     id script = ((id (*)(id, SEL, NSString *, NSInteger, BOOL))objc_msgSend)([scriptClass alloc], initSel, SCWebKitSpoofScript(), 0, NO);
     [configuration.userContentController addUserScript:script];
-    configuration.applicationNameForUserAgent = @"Mobile/15E148";
 }
 
 static id (*orig_WKWebView_initWithFrame_configuration)(id, SEL, CGRect, WKWebViewConfiguration *);
@@ -1560,7 +1555,7 @@ static NSString *sc_WKWebView_customUserAgent(id self, SEL _cmd) {
 
 static void (*orig_WKWebViewConfiguration_setApplicationNameForUserAgent)(id, SEL, NSString *);
 static void sc_WKWebViewConfiguration_setApplicationNameForUserAgent(id self, SEL _cmd, NSString *name) {
-    NSString *fake = SC_WEBKIT_ON() ? @"Mobile/15E148" : name;
+    NSString *fake = SC_WEBKIT_ON() ? nil : name;
     if (orig_WKWebViewConfiguration_setApplicationNameForUserAgent) orig_WKWebViewConfiguration_setApplicationNameForUserAgent(self, _cmd, fake);
 }
 

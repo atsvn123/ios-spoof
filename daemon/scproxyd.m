@@ -160,9 +160,19 @@ static void sc_log(NSString *fmt, ...) {
 }
 
 static const char *sc_pfctl_path(void) {
+    if (access("/var/jb/usr/sbin/pfctl", X_OK) == 0) return "/var/jb/usr/sbin/pfctl";
+    if (access("/usr/sbin/pfctl", X_OK) == 0) return "/usr/sbin/pfctl";
     if (access("/var/jb/sbin/pfctl", X_OK) == 0) return "/var/jb/sbin/pfctl";
     if (access("/sbin/pfctl", X_OK) == 0) return "/sbin/pfctl";
+    if (access("/var/jb/usr/bin/pfctl", X_OK) == 0) return "/var/jb/usr/bin/pfctl";
+    if (access("/usr/bin/pfctl", X_OK) == 0) return "/usr/bin/pfctl";
+    if (access("/var/jb/bin/pfctl", X_OK) == 0) return "/var/jb/bin/pfctl";
+    if (access("/bin/pfctl", X_OK) == 0) return "/bin/pfctl";
     return "/sbin/pfctl";
+}
+
+static NSString *sc_pfctl_missing_error(void) {
+    return @"pfctl missing (checked /var/jb/usr/sbin, /usr/sbin, /var/jb/sbin, /sbin, /var/jb/usr/bin, /usr/bin). Use Compat or install PF tools for this jailbreak.";
 }
 
 static int sc_spawn_wait(const char *path, char *const argv[]) {
@@ -215,6 +225,10 @@ static NSString *sc_pf_rules(void) {
 }
 
 static BOOL sc_pf_load(void) {
+    if (access(sc_pfctl_path(), X_OK) != 0) {
+        sc_log(@"%@", sc_pfctl_missing_error());
+        return NO;
+    }
     NSString *rules = sc_pf_rules();
     NSString *tmp = @"/tmp/scproxy_pf.conf";
     [rules writeToFile:tmp atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -229,6 +243,7 @@ static BOOL sc_pf_load(void) {
 }
 
 static BOOL sc_pf_clear(void) {
+    if (access(sc_pfctl_path(), X_OK) != 0) return NO;
     char anchor[128];
     snprintf(anchor, sizeof(anchor), "%s", SC_PF_ANCHOR);
     char *args[] = { (char *)sc_pfctl_path(), "-a", anchor, "-F", "all", NULL };
@@ -851,7 +866,7 @@ static void *sc_divert_sniff_thread(void *arg) {
 }
 
 static NSString *sc_last_stealth_error(void) {
-    if (access(sc_pfctl_path(), X_OK) != 0) return @"pfctl missing";
+    if (access(sc_pfctl_path(), X_OK) != 0) return sc_pfctl_missing_error();
     int dfd = socket(AF_INET, SOCK_RAW, IPPROTO_DIVERT);
     if (dfd < 0) return [NSString stringWithFormat:@"divert socket failed: %s", strerror(errno)];
     close(dfd);

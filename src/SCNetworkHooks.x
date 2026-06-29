@@ -629,9 +629,6 @@ Boolean sc_SCNetworkReachabilityGetFlags(SCNetworkReachabilityRef ref, SCNetwork
 
 CFArrayRef (*orig_CNCopySupportedInterfaces)(void);
 CFArrayRef sc_CNCopySupportedInterfaces(void) {
-    if (SCCellularMode()) {
-        return CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
-    }
     return orig_CNCopySupportedInterfaces ? orig_CNCopySupportedInterfaces() : NULL;
 }
 

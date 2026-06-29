@@ -196,7 +196,7 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
         case 0: return self.config.networkMode == 2 ? 2 : 4;
-        case 1: return self.config.proxyEnabled ? 9 : 4;
+        case 1: return 10;
         case 2: return [self gpsRowCount];
         case 3: return (self.config.simSlots.count * 7) + (self.config.simSlots.count < 2 ? 1 : 0);
         case 4: return 5;
@@ -296,11 +296,19 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
         return c;
     }
     if (i.row == 2) return [self switchCellWithTitle:@"Stealth Proxy" on:self.config.proxyStealthMode action:@selector(toggleProxyStealth:)];
-    if (!self.config.proxyEnabled || i.row == 8) {
+    if (i.row == 8) {
         UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
         c.textLabel.text = @"Check Proxy";
         c.textLabel.textColor = [UIColor systemBlueColor];
         c.detailTextLabel.text = self.proxyCheckResult ?: @"Tap to check";
+        c.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return c;
+    }
+    if (i.row == 9) {
+        UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+        c.textLabel.text = @"Clear Proxy Setting";
+        c.textLabel.textColor = [UIColor systemRedColor];
+        c.detailTextLabel.text = @"Off + clear system proxy";
         c.selectionStyle = UITableViewCellSelectionStyleDefault;
         return c;
     }
@@ -470,7 +478,8 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)i {
     [t deselectRowAtIndexPath:i animated:YES];
     [self dismissKeyboard];
-    if (i.section == 1 && (!self.config.proxyEnabled || i.row == 8)) { [self checkProxy]; return; }
+    if (i.section == 1 && i.row == 8) { [self checkProxy]; return; }
+    if (i.section == 1 && i.row == 9) { [self clearProxySetting]; return; }
     if (i.section == 2 && !self.config.geoFromIP && i.row == 1) {
         SCGPSSearchViewController *vc = [SCGPSSearchViewController new];
         vc.selectionHandler = ^(double latitude, double longitude) {
@@ -707,7 +716,7 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
     if (self.config.proxyEnabled && proxyFieldsChanged) {
         SCUpdateProxyDaemon(self.config);
     }
-    NSIndexPath *ip = [NSIndexPath indexPathForRow:(self.config.proxyEnabled ? 8 : 3) inSection:1];
+    NSIndexPath *ip = [NSIndexPath indexPathForRow:8 inSection:1];
     UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:ip];
     cell.detailTextLabel.text = @"Checking...";
     NSURL *url = [NSURL URLWithString:@"https://ipwho.is/"];
@@ -724,6 +733,21 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
             [self.tableView reloadData];
         });
     }] resume];
+}
+
+- (void)clearProxySetting {
+    [self.view endEditing:YES];
+    self.config.proxyEnabled = NO;
+    self.config.proxyStealthMode = NO;
+    self.config.proxyType = @"socks5";
+    self.config.proxyHost = @"";
+    self.config.proxyPort = 1080;
+    self.config.proxyUser = @"";
+    self.config.proxyPass = @"";
+    self.proxyCheckResult = @"Cleared";
+    [self.config save];
+    SCSendProxyCommand(@{ @"cmd": @"stop" });
+    [self.tableView reloadData];
 }
 
 #pragma mark - Bluetooth & Signal

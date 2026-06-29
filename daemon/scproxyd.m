@@ -850,6 +850,29 @@ static void *sc_divert_sniff_thread(void *arg) {
     return NULL;
 }
 
+static NSString *sc_last_stealth_error(void) {
+    if (access(sc_pfctl_path(), X_OK) != 0) return @"pfctl missing";
+    int dfd = socket(AF_INET, SOCK_RAW, IPPROTO_DIVERT);
+    if (dfd < 0) return [NSString stringWithFormat:@"divert socket failed: %s", strerror(errno)];
+    close(dfd);
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd < 0) return [NSString stringWithFormat:@"listener socket failed: %s", strerror(errno)];
+    struct sockaddr_in sin;
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sin.sin_port = htons(SC_DIVERT_PORT);
+    int one = 1;
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (bind(lfd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
+        NSString *err = [NSString stringWithFormat:@"listener bind failed: %s", strerror(errno)];
+        close(lfd);
+        return err;
+    }
+    close(lfd);
+    return @"PF/divert runtime start failed";
+}
+
 static BOOL sc_start_stealth_proxy(void) {
     sc_system_proxy_clear();
     if (!sc_pf_load()) return NO;
@@ -923,7 +946,8 @@ static NSData *sc_handle_command(NSDictionary *cmd) {
         if (!ok) {
             g_state.running = NO;
             sc_log(@"%@ proxy failed", g_state.stealth ? @"stealth" : @"compat");
-            return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO), @"err": g_state.stealth ? @"stealth PF/divert start failed" : @"system proxy apply failed"} options:0 error:nil];
+            NSString *err = g_state.stealth ? sc_last_stealth_error() : @"system proxy apply failed";
+            return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(NO), @"err": err ?: @"start failed"} options:0 error:nil];
         }
         sc_log(@"%@ proxy started: %@ %s:%u (API-hidden to apps)", g_state.stealth ? @"stealth" : @"compat", strcmp(g_state.proxyType, "http") == 0 ? @"http" : @"socks5", g_state.host, g_state.port);
         return [NSJSONSerialization dataWithJSONObject:@{@"ok":@(ok)} options:0 error:nil];

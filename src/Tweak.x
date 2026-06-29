@@ -96,6 +96,52 @@ static uint64_t SCRamBytesForPreset(void) {
     return 6ULL * 1024ULL * 1024ULL * 1024ULL;
 }
 
+static NSString *SCEffectiveLocaleIdentifier(void) {
+    if (CFG().localeIdentifier.length) return CFG().localeIdentifier;
+    double lat = CFG().latitude;
+    double lon = CFG().longitude;
+    if (lat >= 8 && lat <= 24 && lon >= 102 && lon <= 110) return @"vi_VN";
+    if (lat >= 30 && lat <= 46 && lon >= 129 && lon <= 146) return @"ja_JP";
+    if (lat >= 33 && lat <= 39 && lon >= 124 && lon <= 132) return @"ko_KR";
+    if (lat >= 25 && lat <= 49 && lon >= -125 && lon <= -67) return @"en_US";
+    if (lat >= 49 && lat <= 61 && lon >= -8 && lon <= 2) return @"en_GB";
+    return @"en_US";
+}
+
+static NSString *SCEffectiveLanguageTag(void) {
+    return [[SCEffectiveLocaleIdentifier() stringByReplacingOccurrencesOfString:@"_" withString:@"-"] copy];
+}
+
+static NSString *SCEffectiveTimezoneIdentifier(void) {
+    if (CFG().timezoneIdentifier.length) return CFG().timezoneIdentifier;
+    NSString *locale = SCEffectiveLocaleIdentifier();
+    if ([locale isEqualToString:@"vi_VN"]) return @"Asia/Ho_Chi_Minh";
+    if ([locale isEqualToString:@"ja_JP"]) return @"Asia/Tokyo";
+    if ([locale isEqualToString:@"ko_KR"]) return @"Asia/Seoul";
+    if ([locale isEqualToString:@"en_GB"]) return @"Europe/London";
+    return @"America/New_York";
+}
+
+static NSString *SCAcceptLanguageHeader(void) {
+    NSString *lang = SCEffectiveLanguageTag();
+    return [NSString stringWithFormat:@"%@,%@;q=0.9,en-US;q=0.8,en;q=0.7", lang, lang];
+}
+
+static float SCFakeBatteryLevelValue(void) {
+    NSString *seedString = CFG().pasteboardUUID.length ? CFG().pasteboardUUID : (P().productType ?: @"iPhone");
+    uint32_t seed = 2166136261u;
+    NSData *seedData = [seedString dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    const uint8_t *bytes = seedData.bytes;
+    for (NSUInteger idx = 0; idx < seedData.length; idx++) {
+        seed ^= bytes[idx];
+        seed *= 16777619u;
+    }
+    float level = 0.35f + ((seed % 63u) / 100.0f); // 35%% - 97%%
+    if (level < 0.05f) level = 0.05f;
+    if (level > 1.0f) level = 1.0f;
+    return level;
+}
+
 static NSOperatingSystemVersion SCFakeOSVersion(void) {
     NSString *version = CFG().systemVersion.length ? CFG().systemVersion : @"17.5";
     NSArray<NSString *> *parts = [version componentsSeparatedByString:@"."];
@@ -178,12 +224,13 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
 }
 - (float)batteryLevel {
     if (SC_ON() && CFG().spoofBattery && P()) {
-        return [P().batteryLevel floatValue];
+        return SCFakeBatteryLevelValue();
     }
     return %orig;
 }
 - (UIDeviceBatteryState)batteryState {
     if (SC_ON() && CFG().spoofBattery && P()) {
+        if (SCFakeBatteryLevelValue() >= 0.97f) return UIDeviceBatteryStateFull;
         NSString *s = P().batteryState;
         if ([s isEqualToString:@"charging"]) return UIDeviceBatteryStateCharging;
         if ([s isEqualToString:@"full"]) return UIDeviceBatteryStateFull;
@@ -604,12 +651,17 @@ static void SCInstallStatusOverlay(UIWindow *window) {
         %orig(SCNativeUserAgent(), field);
         return;
     }
+    if (SC_ON() && [field caseInsensitiveCompare:@"Accept-Language"] == NSOrderedSame) {
+        %orig(SCAcceptLanguageHeader(), field);
+        return;
+    }
     %orig;
 }
 - (void)setAllHTTPHeaderFields:(NSDictionary<NSString *,NSString *> *)headerFields {
     if (SC_ON()) {
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:headerFields ?: @{}];
         m[@"User-Agent"] = SCNativeUserAgent();
+        m[@"Accept-Language"] = SCAcceptLanguageHeader();
         %orig(m);
         return;
     }
@@ -623,6 +675,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
     if (SC_ON()) {
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
         m[@"User-Agent"] = SCNativeUserAgent();
+        m[@"Accept-Language"] = SCAcceptLanguageHeader();
         return m;
     }
     return d;
@@ -636,6 +689,7 @@ static void SCInstallStatusOverlay(UIWindow *window) {
         NSString *ua = SCNativeUserAgent();
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
         m[@"User-Agent"] = ua;
+        m[@"Accept-Language"] = SCAcceptLanguageHeader();
         return [m copy];
     }
     return d;
@@ -1188,38 +1242,39 @@ static int sc_uname(struct utsname *buf) {
 %hook NSLocale
 - (NSString *)localeIdentifier {
     if (SC_ON() && CFG().localeIdentifier.length) return CFG().localeIdentifier;
+    if (SC_ON()) return SCEffectiveLocaleIdentifier();
     return %orig;
 }
 - (NSString *)countryCode {
-    if (SC_ON() && CFG().localeIdentifier.length) {
-        NSArray *parts = [CFG().localeIdentifier componentsSeparatedByString:@"_"];
+    if (SC_ON()) {
+        NSArray *parts = [SCEffectiveLocaleIdentifier() componentsSeparatedByString:@"_"];
         if (parts.count >= 2) return parts[1];
     }
     return %orig;
 }
 - (NSString *)languageCode {
-    if (SC_ON() && CFG().localeIdentifier.length) {
-        NSArray *parts = [CFG().localeIdentifier componentsSeparatedByString:@"_"];
+    if (SC_ON()) {
+        NSArray *parts = [SCEffectiveLocaleIdentifier() componentsSeparatedByString:@"_"];
         if (parts.count >= 1) return parts[0];
     }
     return %orig;
 }
 + (instancetype)currentLocale {
-    if (SC_ON() && CFG().localeIdentifier.length) {
-        return [NSLocale localeWithLocaleIdentifier:CFG().localeIdentifier];
+    if (SC_ON()) {
+        return [NSLocale localeWithLocaleIdentifier:SCEffectiveLocaleIdentifier()];
     }
     return %orig;
 }
 + (instancetype)systemLocale {
-    if (SC_ON() && CFG().localeIdentifier.length) {
-        return [NSLocale localeWithLocaleIdentifier:CFG().localeIdentifier];
+    if (SC_ON()) {
+        return [NSLocale localeWithLocaleIdentifier:SCEffectiveLocaleIdentifier()];
     }
     return %orig;
 }
 + (NSArray *)preferredLanguages {
     NSArray *orig = %orig;
-    if (SC_ON() && CFG().localeIdentifier.length) {
-        NSMutableArray *m = [NSMutableArray arrayWithObject:CFG().localeIdentifier];
+    if (SC_ON()) {
+        NSMutableArray *m = [NSMutableArray arrayWithObject:SCEffectiveLanguageTag()];
         [m addObjectsFromArray:orig];
         return m.copy;
     }
@@ -1229,19 +1284,19 @@ static int sc_uname(struct utsname *buf) {
 
 %hook NSTimeZone
 + (instancetype)systemTimeZone {
-    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    if (SC_ON()) return [NSTimeZone timeZoneWithName:SCEffectiveTimezoneIdentifier()];
     return %orig;
 }
 + (instancetype)localTimeZone {
-    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    if (SC_ON()) return [NSTimeZone timeZoneWithName:SCEffectiveTimezoneIdentifier()];
     return %orig;
 }
 + (instancetype)defaultTimeZone {
-    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    if (SC_ON()) return [NSTimeZone timeZoneWithName:SCEffectiveTimezoneIdentifier()];
     return %orig;
 }
 + (instancetype)timeZoneForSecondsFromGMT:(NSInteger)seconds {
-    if (SC_ON() && CFG().timezoneIdentifier.length) return [NSTimeZone timeZoneWithName:CFG().timezoneIdentifier];
+    if (SC_ON()) return [NSTimeZone timeZoneWithName:SCEffectiveTimezoneIdentifier()];
     return %orig;
 }
 %end
@@ -1340,17 +1395,15 @@ static NSSet *sc_protected_bundles(void) {
 // ============================================================================
 
 static NSString *SCWebKitUserAgent(void) {
-    NSString *version = CFG().systemVersion.length ? CFG().systemVersion : @"17_5";
-    version = [version stringByReplacingOccurrencesOfString:@"." withString:@"_"];
-    return [NSString stringWithFormat:@"Mozilla/5.0 (iPhone; CPU iPhone OS %@ like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148", version];
+    return SCNativeUserAgent();
 }
 
 static NSString *SCWebKitSpoofScript(void) {
     CGFloat scale = MAX((CGFloat)P().screenScale, 1.0);
     NSInteger width = P().screenWidth / scale;
     NSInteger height = P().screenHeight / scale;
-    NSString *locale = CFG().localeIdentifier.length ? [CFG().localeIdentifier stringByReplacingOccurrencesOfString:@"_" withString:@"-"] : @"en-US";
-    NSString *tz = CFG().timezoneIdentifier.length ? CFG().timezoneIdentifier : @"UTC";
+    NSString *locale = SCEffectiveLanguageTag();
+    NSString *tz = SCEffectiveTimezoneIdentifier();
     NSString *platform = @"iPhone";
     NSString *ua = SCWebKitUserAgent();
     double lat = CFG().latitude;
@@ -1403,8 +1456,12 @@ static NSString *SCWebKitSpoofScript(void) {
          "CanvasRenderingContext2D.prototype.measureText=function(t){const r=mt.call(this,t);try{Object.defineProperty(r,'width',{value:r.width+offset('m'+String(t),0.12),configurable:true});}catch(e){}return r;};"
          "const patchGL=(proto)=>{if(!proto)return;const gp=proto.getParameter;proto.getParameter=function(p){if(p===37445)return '%@';if(p===37446)return '%@';if(p===3379)return 16384;if(p===36347||p===36348)return 16;return gp.call(this,p);};maskNative(proto.getParameter,'getParameter');const rp=proto.readPixels;proto.readPixels=function(...args){const out=args[6];const ret=rp.apply(this,args);if(out&&typeof out.length==='number'){for(let i=0;i<Math.min(out.length,64);i+=11){out[i]=Math.max(0,Math.min(255,out[i]+Math.round(offset('w'+i,1))));}}return ret;};maskNative(proto.readPixels,'readPixels');const ge=proto.getSupportedExtensions; if(ge){proto.getSupportedExtensions=function(){const ex=ge.call(this)||[];return Array.from(new Set(ex.concat(['WEBGL_debug_renderer_info']))).sort();};maskNative(proto.getSupportedExtensions,'getSupportedExtensions');}const sp=proto.getShaderPrecisionFormat;if(sp){proto.getShaderPrecisionFormat=function(...args){const r=sp.apply(this,args);if(r){try{Object.defineProperty(r,'precision',{value:(r.precision||23)+1,configurable:true});}catch(e){}}return r;};maskNative(proto.getShaderPrecisionFormat,'getShaderPrecisionFormat');}};"
          "patchGL(window.WebGLRenderingContext&&WebGLRenderingContext.prototype);patchGL(window.WebGL2RenderingContext&&WebGL2RenderingContext.prototype);"
-         "if(window.OffscreenCanvas&&OffscreenCanvas.prototype&&OffscreenCanvas.prototype.convertToBlob){const ctb=OffscreenCanvas.prototype.convertToBlob;OffscreenCanvas.prototype.convertToBlob=function(...args){return ctb.apply(this,args);};maskNative(OffscreenCanvas.prototype.convertToBlob,'convertToBlob');}"
-         "if(navigator.gpu){const gpu=navigator.gpu;try{if(gpu.requestAdapter){const ra=gpu.requestAdapter.bind(gpu);gpu.requestAdapter=function(...args){return ra(...args).then(a=>{if(!a)return a;try{if(a.requestAdapterInfo){const rai=a.requestAdapterInfo.bind(a);a.requestAdapterInfo=function(){return rai().then(info=>{try{Object.defineProperty(info,'vendor',{value:'apple',configurable:true});Object.defineProperty(info,'architecture',{value:'apple-gpu',configurable:true});Object.defineProperty(info,'device',{value:'%@',configurable:true});Object.defineProperty(info,'description',{value:'%@',configurable:true});}catch(e){}return info;});};maskNative(a.requestAdapterInfo,'requestAdapterInfo');}}catch(e){}return a;});};maskNative(gpu.requestAdapter,'requestAdapter');}}catch(e){}}"
+          "if(window.OffscreenCanvas&&OffscreenCanvas.prototype&&OffscreenCanvas.prototype.convertToBlob){const ctb=OffscreenCanvas.prototype.convertToBlob;OffscreenCanvas.prototype.convertToBlob=function(...args){return ctb.apply(this,args);};maskNative(OffscreenCanvas.prototype.convertToBlob,'convertToBlob');}"
+          "if(navigator.gpu){const gpu=navigator.gpu;try{if(gpu.requestAdapter){const ra=gpu.requestAdapter.bind(gpu);gpu.requestAdapter=function(...args){return ra(...args).then(a=>{if(!a)return a;try{if(a.requestAdapterInfo){const rai=a.requestAdapterInfo.bind(a);a.requestAdapterInfo=function(){return rai().then(info=>{try{Object.defineProperty(info,'vendor',{value:'apple',configurable:true});Object.defineProperty(info,'architecture',{value:'apple-gpu',configurable:true});Object.defineProperty(info,'device',{value:'%@',configurable:true});Object.defineProperty(info,'description',{value:'%@',configurable:true});}catch(e){}return info;});};maskNative(a.requestAdapterInfo,'requestAdapterInfo');}}catch(e){}return a;});};maskNative(gpu.requestAdapter,'requestAdapter');}}catch(e){}}"
+          "const scrubSDP=(s)=>String(s||'').replace(/a=candidate:.*\r?\n/g,'').replace(/c=IN IP4 .*\r?\n/g,'c=IN IP4 0.0.0.0\r\n').replace(/c=IN IP6 .*\r?\n/g,'c=IN IP6 ::\r\n');"
+          "const patchRTC=(RTC)=>{if(!RTC||!RTC.prototype)return;const o=RTC.prototype.createOffer; if(o){RTC.prototype.createOffer=function(...args){return o.apply(this,args).then(d=>({type:d.type,sdp:scrubSDP(d.sdp)}));};maskNative(RTC.prototype.createOffer,'createOffer');} const a=RTC.prototype.createAnswer; if(a){RTC.prototype.createAnswer=function(...args){return a.apply(this,args).then(d=>({type:d.type,sdp:scrubSDP(d.sdp)}));};maskNative(RTC.prototype.createAnswer,'createAnswer');} const sld=RTC.prototype.setLocalDescription; if(sld){RTC.prototype.setLocalDescription=function(desc){if(desc&&desc.sdp)desc={type:desc.type,sdp:scrubSDP(desc.sdp)};return sld.call(this,desc);};maskNative(RTC.prototype.setLocalDescription,'setLocalDescription');} const gcs=RTC.prototype.getStats; if(gcs){RTC.prototype.getStats=function(...args){return gcs.apply(this,args).then(r=>{try{r.forEach(v=>{if(v&&v.candidateType){v.ip='0.0.0.0';v.address='0.0.0.0';v.port=0;}});}catch(e){}return r;});};maskNative(RTC.prototype.getStats,'getStats');}};"
+          "patchRTC(window.RTCPeerConnection);patchRTC(window.webkitRTCPeerConnection);"
+          "if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){const gum=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getUserMedia=(c)=>Promise.reject(new DOMException('Permission denied','NotAllowedError'));maskNative(navigator.mediaDevices.getUserMedia,'getUserMedia');}"
           "if(window.AudioBuffer&&AudioBuffer.prototype.getChannelData){const gcd=AudioBuffer.prototype.getChannelData;AudioBuffer.prototype.getChannelData=function(ch){const a=gcd.call(this,ch);for(let i=0;i<Math.min(a.length,128);i+=17){a[i]=a[i]+offset('a'+i,0.00001);}return a;};maskNative(AudioBuffer.prototype.getChannelData,'getChannelData');}"
           "if(window.AnalyserNode&&AnalyserNode.prototype.getFloatFrequencyData){const gffd=AnalyserNode.prototype.getFloatFrequencyData;AnalyserNode.prototype.getFloatFrequencyData=function(arr){const r=gffd.call(this,arr);for(let i=0;i<Math.min(arr.length,64);i+=13){arr[i]=arr[i]+offset('f'+i,0.015);}return r;};maskNative(AnalyserNode.prototype.getFloatFrequencyData,'getFloatFrequencyData');}"
           "if(window.AudioContext&&AudioContext.prototype){def(AudioContext.prototype,'sampleRate',48000);}if(window.webkitAudioContext&&webkitAudioContext.prototype){def(webkitAudioContext.prototype,'sampleRate',48000);}"

@@ -346,6 +346,9 @@ static NSDictionary *SCUpdateProxyDaemon(SCAppConfig *config) {
         NSDictionary *result = SCUpdateProxyDaemon(self.config);
         if (![result[@"ok"] boolValue]) {
             self.proxyCheckResult = [result[@"err"] description] ?: @"Proxy restart failed";
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Stealth restart failed" message:self.proxyCheckResult preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            [self presentViewController:alert animated:YES completion:nil];
         }
     }
     [self.tableView reloadData];

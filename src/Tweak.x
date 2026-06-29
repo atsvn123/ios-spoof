@@ -131,6 +131,27 @@ static NSString *SCAcceptLanguageHeader(void) {
     return [NSString stringWithFormat:@"%@,%@;q=0.9,en-US;q=0.8,en;q=0.7", lang, base];
 }
 
+static NSArray *SCPreferredLanguagesArray(void) {
+    NSString *lang = SCEffectiveLanguageTag();
+    NSString *base = [[lang componentsSeparatedByString:@"-"] firstObject] ?: lang;
+    NSMutableArray *langs = [NSMutableArray arrayWithObjects:lang, base, nil];
+    if (![base isEqualToString:@"en"]) {
+        [langs addObject:@"en-US"];
+        [langs addObject:@"en"];
+    }
+    return langs.copy;
+}
+
+static CFPropertyListRef (*orig_CFPreferencesCopyAppValue)(CFStringRef key, CFStringRef applicationID);
+static CFPropertyListRef sc_CFPreferencesCopyAppValue(CFStringRef key, CFStringRef applicationID) {
+    if (SC_ON() && key) {
+        NSString *k = (__bridge NSString *)key;
+        if ([k isEqualToString:@"AppleLanguages"]) return CFBridgingRetain(SCPreferredLanguagesArray());
+        if ([k isEqualToString:@"AppleLocale"]) return CFBridgingRetain(SCEffectiveLocaleIdentifier());
+    }
+    return orig_CFPreferencesCopyAppValue ? orig_CFPreferencesCopyAppValue(key, applicationID) : NULL;
+}
+
 static float SCFakeBatteryLevelValue(void) {
     NSString *seedString = CFG().pasteboardUUID.length ? CFG().pasteboardUUID : (P().productType ?: @"iPhone");
     uint32_t seed = 2166136261u;
@@ -1278,11 +1299,39 @@ static int sc_uname(struct utsname *buf) {
 + (NSArray *)preferredLanguages {
     NSArray *orig = %orig;
     if (SC_ON()) {
-        NSMutableArray *m = [NSMutableArray arrayWithObject:SCEffectiveLanguageTag()];
+        NSMutableArray *m = [NSMutableArray arrayWithArray:SCPreferredLanguagesArray()];
         [m addObjectsFromArray:orig];
         return m.copy;
     }
     return orig;
+}
+%end
+
+%hook NSUserDefaults
+- (id)objectForKey:(NSString *)defaultName {
+    if (SC_ON()) {
+        if ([defaultName isEqualToString:@"AppleLanguages"]) return SCPreferredLanguagesArray();
+        if ([defaultName isEqualToString:@"AppleLocale"]) return SCEffectiveLocaleIdentifier();
+    }
+    return %orig;
+}
+- (NSArray *)arrayForKey:(NSString *)defaultName {
+    if (SC_ON() && [defaultName isEqualToString:@"AppleLanguages"]) return SCPreferredLanguagesArray();
+    return %orig;
+}
+- (NSString *)stringForKey:(NSString *)defaultName {
+    if (SC_ON() && [defaultName isEqualToString:@"AppleLocale"]) return SCEffectiveLocaleIdentifier();
+    return %orig;
+}
+- (NSDictionary *)dictionaryRepresentation {
+    NSDictionary *d = %orig;
+    if (SC_ON()) {
+        NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
+        m[@"AppleLanguages"] = SCPreferredLanguagesArray();
+        m[@"AppleLocale"] = SCEffectiveLocaleIdentifier();
+        return m;
+    }
+    return d;
 }
 %end
 
@@ -1444,7 +1493,6 @@ static NSString *SCWebKitSpoofScript(void) {
           "const ro=Intl.DateTimeFormat.prototype.resolvedOptions;Intl.DateTimeFormat.prototype.resolvedOptions=function(){const r=ro.call(this);r.timeZone='%@';r.locale='%@';return r;};"
           "maskNative(Intl.DateTimeFormat.prototype.resolvedOptions,'resolvedOptions');"
           "Date.prototype.getTimezoneOffset=function(){return %ld;};maskNative(Date.prototype.getTimezoneOffset,'getTimezoneOffset');"
-          "const dts=Date.prototype.toString,dtts=Date.prototype.toTimeString;Date.prototype.toString=function(){return dts.call(this).replace(/\\s\\([^)]*\\)$/,'');};Date.prototype.toTimeString=function(){return dtts.call(this).replace(/\\s\\([^)]*\\)$/,'');};maskNative(Date.prototype.toString,'toString');maskNative(Date.prototype.toTimeString,'toTimeString');"
          "if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices){const ed=navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices);navigator.mediaDevices.enumerateDevices=()=>Promise.resolve([]);maskNative(navigator.mediaDevices.enumerateDevices,'enumerateDevices');}"
          "if(navigator.geolocation){const geo={coords:{latitude:%0.8f,longitude:%0.8f,accuracy:%0.2f,altitude:%0.2f,altitudeAccuracy:%0.2f,heading:%0.2f,speed:0},timestamp:Date.now()};const gcp=(s,e,o)=>setTimeout(()=>s&&s(geo),0);const gwp=(s,e,o)=>{gcp(s,e,o);return 1;};navigator.geolocation.getCurrentPosition=gcp;navigator.geolocation.watchPosition=gwp;navigator.geolocation.clearWatch=()=>{};maskNative(navigator.geolocation.getCurrentPosition,'getCurrentPosition');maskNative(navigator.geolocation.watchPosition,'watchPosition');maskNative(navigator.geolocation.clearWatch,'clearWatch');}"
          "const toDataURL=HTMLCanvasElement.prototype.toDataURL;"
@@ -1718,6 +1766,7 @@ static void SCInstallMobileGestaltHooks(void) {
             MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
             MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
             MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
+            MSHookFunction((void *)&CFPreferencesCopyAppValue, (void *)sc_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue);
             MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
             MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
             SCInstallWebKitHooks();

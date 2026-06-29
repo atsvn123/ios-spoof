@@ -8,6 +8,18 @@
         <array>
             <string>UIApplication</string>
         </array>
+        <key>Bundles</key>
+        <array>
+            <string>com.apple.WebKit.WebContent</string>
+            <string>com.apple.WebKit.Networking</string>
+        </array>
+        <key>Executables</key>
+        <array>
+            <string>com.apple.WebKit.WebContent</string>
+            <string>com.apple.WebKit.Networking</string>
+            <string>WebContent</string>
+            <string>Networking</string>
+        </array>
     </dict>
 </dict>
 </plist>

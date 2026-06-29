@@ -222,6 +222,18 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
         ]];
     });
     if ([protectedBundles containsObject:_bundleID]) return NO;
+
+    NSString *proc = [[NSProcessInfo processInfo] processName] ?: @"";
+    BOOL isWebKitHelper = [_bundleID hasPrefix:@"com.apple.WebKit"] || [proc hasPrefix:@"com.apple.WebKit"] || [proc containsString:@"WebContent"] || [proc containsString:@"Networking"];
+    if (isWebKitHelper && _enabled) {
+        if (_targetBundles.count == 0) return YES;
+        for (NSString *target in _targetBundles) {
+            if ([target isKindOfClass:[NSString class]] && ([target isEqualToString:@"com.apple.mobilesafari"] || [target isEqualToString:@"com.apple.SafariViewService"])) {
+                return YES;
+            }
+        }
+        return NO;
+    }
     
     // If targetBundles is populated, only inject into listed apps
     if (_targetBundles.count > 0) {

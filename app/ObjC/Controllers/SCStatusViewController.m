@@ -33,7 +33,7 @@
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
-        case 0: return 4;  // Status + Kernel Mode
+        case 0: return 3;
         case 1: return 14; // Device info
         case 2: return 4;  // Carrier
         case 3: return 6;  // GPS
@@ -55,10 +55,9 @@
     switch (i.section) {
         case 0: {
             if (i.row == 0) return [self switchCellWithTitle:@"Bật Spoof" on:self.config.enabled action:@selector(toggleEnabled:)];
-            if (i.row == 1) return [self switchCellWithTitle:@"Kernel-Level Spoof" on:self.config.kernelMode action:@selector(toggleKernelMode:)];
-            if (i.row == 2) {
+            if (i.row == 1) {
                 BOOL installed = [SCAppConfig systemhookInstalled];
-                UITableViewCell *c = [self cellWithTitle:@"Daemon" detail:installed ? @"Đã cài đặt" : @"Chưa cài đặt"];
+                UITableViewCell *c = [self cellWithTitle:@"Systemhook" detail:installed ? @"Đã cài đặt" : @"Chưa cài đặt"];
                 c.detailTextLabel.textColor = installed ? [UIColor systemGreenColor] : [UIColor systemRedColor];
                 return c;
             }
@@ -146,21 +145,5 @@
 }
 
 - (void)toggleEnabled:(UISwitch *)sw { self.config.enabled = sw.on; [self.config save]; }
-- (void)toggleKernelMode:(UISwitch *)sw {
-    if (sw.on && self.config.targetBundles.count == 0) {
-        sw.on = NO;
-        self.config.kernelMode = NO;
-        [self.config save];
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Cần chọn app"
-                                                                       message:@"Kernel-Level Spoof không chạy global. Hãy chọn target app trước để tránh hook vào process hệ thống."
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    self.config.kernelMode = sw.on;
-    [self.config save];
-    [self.tableView reloadData];
-}
 
 @end

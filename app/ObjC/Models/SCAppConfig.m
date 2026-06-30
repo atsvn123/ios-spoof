@@ -7,6 +7,24 @@
 
 NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.changed";
 
+static NSString *SCSystemhookArmPath(void) {
+    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb/var/mobile/Library/Preferences"]) {
+        return @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.systemhook.arm";
+    }
+    return @"/var/mobile/Library/Preferences/com.iosspoof.systemhook.arm";
+}
+
+static void SCUpdateSystemhookArmFile(BOOL active) {
+    NSString *path = SCSystemhookArmPath();
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm createDirectoryAtPath:[path stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
+    if (active) {
+        [@"1\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } else {
+        [fm removeItemAtPath:path error:nil];
+    }
+}
+
 static NSString *SCRandomIPv4Octet(NSInteger base) {
     return [NSString stringWithFormat:@"10.%u.%u.%ld", arc4random_uniform(200) + 20, arc4random_uniform(250) + 1, (long)base];
 }
@@ -142,7 +160,8 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.localeIdentifier = d[@"localeIdentifier"] ?: @"";
     self.timezoneIdentifier = d[@"timezoneIdentifier"] ?: @"";
     self.timestampOffset = d[@"timestampOffset"] ? [d[@"timestampOffset"] doubleValue] : 0;
-    self.kernelMode = d[@"kernelMode"] ? [d[@"kernelMode"] boolValue] : NO;
+    self.kernelMode = NO;
+    SCUpdateSystemhookArmFile(NO);
     if (needsIdentitySave) [self save];
 }
 
@@ -206,8 +225,9 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     d[@"localeIdentifier"] = self.localeIdentifier ?: @"";
     d[@"timezoneIdentifier"] = self.timezoneIdentifier ?: @"";
     d[@"timestampOffset"] = @(self.timestampOffset);
-    d[@"kernelMode"] = @(self.kernelMode);
+    d[@"kernelMode"] = @(NO);
     [d writeToFile:[self prefsPath] atomically:YES];
+    SCUpdateSystemhookArmFile(NO);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }
 

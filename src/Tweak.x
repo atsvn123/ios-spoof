@@ -673,20 +673,22 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 
 %hook NSMutableURLRequest
 - (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
-    if (SC_WEBKIT_ON() && [field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
-        %orig(SCNativeUserAgent(), field);
-        return;
-    }
-    if (SC_ON() && [field caseInsensitiveCompare:@"Accept-Language"] == NSOrderedSame) {
-        %orig(SCAcceptLanguageHeader(), field);
-        return;
+    if (SC_WEBKIT_ON()) {
+        if ([field caseInsensitiveCompare:@"User-Agent"] == NSOrderedSame) {
+            %orig(SCNativeUserAgent(), field);
+            return;
+        }
+        if ([field caseInsensitiveCompare:@"Accept-Language"] == NSOrderedSame) {
+            %orig(SCAcceptLanguageHeader(), field);
+            return;
+        }
     }
     %orig;
 }
 - (void)setAllHTTPHeaderFields:(NSDictionary<NSString *,NSString *> *)headerFields {
-    if (SC_ON()) {
+    if (SC_WEBKIT_ON()) {
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:headerFields ?: @{}];
-        if (SC_WEBKIT_ON()) m[@"User-Agent"] = SCNativeUserAgent();
+        m[@"User-Agent"] = SCNativeUserAgent();
         m[@"Accept-Language"] = SCAcceptLanguageHeader();
         %orig(m);
         return;
@@ -698,9 +700,9 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 %hook NSURLRequest
 - (NSDictionary<NSString *,NSString *> *)allHTTPHeaderFields {
     NSDictionary *d = %orig;
-    if (SC_ON()) {
+    if (SC_WEBKIT_ON()) {
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
-        if (SC_WEBKIT_ON()) m[@"User-Agent"] = SCNativeUserAgent();
+        m[@"User-Agent"] = SCNativeUserAgent();
         m[@"Accept-Language"] = SCAcceptLanguageHeader();
         return m;
     }
@@ -711,10 +713,10 @@ static void SCInstallStatusOverlay(UIWindow *window) {
 %hook NSURLSessionConfiguration
 - (NSDictionary *)HTTPAdditionalHeaders {
     NSDictionary *d = %orig;
-    if (SC_ON() && CFG().systemVersion) {
+    if (SC_WEBKIT_ON() && CFG().systemVersion) {
         NSString *ua = SCNativeUserAgent();
         NSMutableDictionary *m = [NSMutableDictionary dictionaryWithDictionary:d ?: @{}];
-        if (SC_WEBKIT_ON()) m[@"User-Agent"] = ua;
+        m[@"User-Agent"] = ua;
         m[@"Accept-Language"] = SCAcceptLanguageHeader();
         return [m copy];
     }
@@ -1691,7 +1693,7 @@ static void SCInstallMobileGestaltHooks(void) {
             return;
         }
 
-        BOOL kernelMode = CFG().kernelMode;
+        BOOL kernelMode = NO;
 
         // Đăng ký lắng nghe thay đổi preferences
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),

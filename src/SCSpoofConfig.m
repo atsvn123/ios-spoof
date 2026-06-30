@@ -113,7 +113,7 @@ NSNotificationName const SCSpoofConfigDidChangeNotification = @"SCSpoofConfigDid
     _localeIdentifier = SC_READ_STR(@"localeIdentifier");
     _timezoneIdentifier = SC_READ_STR(@"timezoneIdentifier");
     _timestampOffset = [d[@"timestampOffset"] doubleValue];
-    _kernelMode = [d[@"kernelMode"] boolValue];
+    _kernelMode = NO;
 
     id tb = d[@"targetBundles"];
     if ([tb isKindOfClass:[NSArray class]]) {

@@ -112,8 +112,12 @@ static CLLocation *sc_make_location() {
     return kCLAuthorizationStatusAuthorizedAlways;
 }
 
-- (void)requestWhenInUseAuthorization { %orig; }
-- (void)requestAlwaysAuthorization { %orig; }
+- (void)requestWhenInUseAuthorization {
+    %orig;
+}
+- (void)requestAlwaysAuthorization {
+    %orig;
+}
 
 - (BOOL)locationServicesEnabled {
     return YES;

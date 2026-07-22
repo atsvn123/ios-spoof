@@ -1365,8 +1365,12 @@ static int sc_uname(struct utsname *buf) {
     }
     return d;
 }
-+ (instancetype)distantPast { return %orig; }
-+ (instancetype)distantFuture { return %orig; }
++ (instancetype)distantPast {
+    return %orig;
+}
++ (instancetype)distantFuture {
+    return %orig;
+}
 - (instancetype)init {
     self = %orig;
     if (SC_ON() && CFG().timestampOffset != 0) {

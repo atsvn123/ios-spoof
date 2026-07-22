@@ -33,7 +33,7 @@
 
 - (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
     switch (s) {
-        case 0: return 3;
+        case 0: return 2;
         case 1: return 14; // Device info
         case 2: return 4;  // Carrier
         case 3: return 6;  // GPS
@@ -55,12 +55,6 @@
     switch (i.section) {
         case 0: {
             if (i.row == 0) return [self switchCellWithTitle:@"Bật Spoof" on:self.config.enabled action:@selector(toggleEnabled:)];
-            if (i.row == 1) {
-                BOOL installed = [SCAppConfig systemhookInstalled];
-                UITableViewCell *c = [self cellWithTitle:@"Systemhook" detail:installed ? @"Đã cài đặt" : @"Chưa cài đặt"];
-                c.detailTextLabel.textColor = installed ? [UIColor systemGreenColor] : [UIColor systemRedColor];
-                return c;
-            }
             return [self cellWithTitle:@"Target Apps" detail:[NSString stringWithFormat:@"%lu app", (unsigned long)self.config.targetBundles.count]];
         }
         case 1: {

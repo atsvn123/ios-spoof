@@ -2,28 +2,8 @@
 #import "SCDevicePresetStore.h"
 #import "SCLocaleStore.h"
 #import <CoreFoundation/CoreFoundation.h>
-#import <dlfcn.h>
-#import <stdlib.h>
 
 NSString * const SCPreferencesChangedNotification = @"com.iosspoof.tweak.prefs.changed";
-
-static NSString *SCSystemhookArmPath(void) {
-    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb/var/mobile/Library/Preferences"]) {
-        return @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.systemhook.arm";
-    }
-    return @"/var/mobile/Library/Preferences/com.iosspoof.systemhook.arm";
-}
-
-static void SCUpdateSystemhookArmFile(BOOL active) {
-    NSString *path = SCSystemhookArmPath();
-    NSFileManager *fm = [NSFileManager defaultManager];
-    [fm createDirectoryAtPath:[path stringByDeletingLastPathComponent] withIntermediateDirectories:YES attributes:nil error:nil];
-    if (active) {
-        [@"1\n" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    } else {
-        [fm removeItemAtPath:path error:nil];
-    }
-}
 
 static NSString *SCRandomIPv4Octet(NSInteger base) {
     return [NSString stringWithFormat:@"10.%u.%u.%ld", arc4random_uniform(200) + 20, arc4random_uniform(250) + 1, (long)base];
@@ -36,46 +16,6 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
 }
 
 @implementation SCAppConfig
-
-+ (BOOL)systemhookInstalled {
-    // Check if custom roothide with iOSSpoof systemhook is installed
-    // Look for the env var set by iosspoof_system_init()
-    if (getenv("SC_SYSTEMHOOK_ACTIVE")) return YES;
-
-    NSArray *markers = @[
-        @"/var/mobile/Library/Preferences/com.iosspoof.systemhook.active",
-        @"/var/jb/var/mobile/Library/Preferences/com.iosspoof.systemhook.active",
-    ];
-    for (NSString *marker in markers) {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:marker]) return YES;
-    }
-
-    // Check if systemhook.dylib exists and contains iosspoof_system_init symbol
-    void *handle = dlopen("/usr/lib/systemhook.dylib", RTLD_NOLOAD);
-    if (handle) {
-        if (dlsym(handle, "iosspoof_system_init")) return YES;
-    }
-    // Also check jbroot path
-    NSArray *paths = @[
-        @"/var/jb/usr/lib/systemhook.dylib",
-        @"/var/jb/basebin/systemhook.dylib",
-        @"/basebin/systemhook.dylib",
-        @"/usr/lib/systemhook.dylib",
-    ];
-    for (NSString *p in paths) {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:p]) {
-            void *h = dlopen([p UTF8String], RTLD_NOLOAD);
-            if (h && dlsym(h, "iosspoof_system_init")) return YES;
-
-            NSData *data = [NSData dataWithContentsOfFile:p options:NSDataReadingMappedIfSafe error:nil];
-            if (data.length > 0) {
-                NSData *needle = [@"iosspoof_system_init" dataUsingEncoding:NSUTF8StringEncoding];
-                if ([data rangeOfData:needle options:0 range:NSMakeRange(0, data.length)].location != NSNotFound) return YES;
-            }
-        }
-    }
-    return NO;
-}
 
 + (instancetype)shared {
     static SCAppConfig *cfg;
@@ -160,8 +100,6 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.localeIdentifier = d[@"localeIdentifier"] ?: @"";
     self.timezoneIdentifier = d[@"timezoneIdentifier"] ?: @"";
     self.timestampOffset = d[@"timestampOffset"] ? [d[@"timestampOffset"] doubleValue] : 0;
-    self.kernelMode = NO;
-    SCUpdateSystemhookArmFile(NO);
     if (needsIdentitySave) [self save];
 }
 
@@ -225,9 +163,7 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     d[@"localeIdentifier"] = self.localeIdentifier ?: @"";
     d[@"timezoneIdentifier"] = self.timezoneIdentifier ?: @"";
     d[@"timestampOffset"] = @(self.timestampOffset);
-    d[@"kernelMode"] = @(NO);
     [d writeToFile:[self prefsPath] atomically:YES];
-    SCUpdateSystemhookArmFile(NO);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)SCPreferencesChangedNotification, NULL, NULL, true);
 }
 
@@ -245,7 +181,6 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
 
 - (void)resetAll {
     self.enabled = NO;
-    self.kernelMode = NO;
     self.productType = @"iPhone14,5";
     self.randomizeOnLaunch = NO;
     self.targetBundles = @[];
@@ -262,7 +197,6 @@ static NSArray<NSDictionary *> *SCDefaultSIMSlots(NSString *name, NSString *mcc,
     self.productType = preset[@"productType"];
     self.randomizeOnLaunch = YES;
     self.enabled = YES;
-    self.kernelMode = NO;
     self.geoEnabled = YES;
     self.carrierName = preset[@"carrierName"];
     self.carrierMCC = preset[@"carrierMCC"];

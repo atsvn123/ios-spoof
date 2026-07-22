@@ -1,6 +1,6 @@
 # iOSSpoof
 
-Advanced iOS device spoofer with transparent proxy, carrier/GPS spoofing, and anti-detection. Built for Dopamine (rootless) jailbreak.
+Advanced iOS device spoofer with transparent proxy, carrier/GPS spoofing, and anti-detection. Built for rootless/roothide jailbreaks.
 
 ## Features
 
@@ -185,11 +185,10 @@ If a bootloop happens:
 3. Remove the package: `dpkg -r com.iosspoof.tweak`.
 4. If needed, delete `/var/jb/Library/MobileSubstrate/DynamicLibraries/iOSSpoof.*` and `/var/jb/Library/LaunchDaemons/com.iosspoof.scproxyd.plist`.
 
-## Roothide / Dopamine Notes
+## Notes
 
 - Tweak injects only into GUI apps that match `Classes = UIApplication`; hooks are only installed for apps listed in **Target Apps** in Settings.
 - Apps installed from App Store work normally — no need to install via roothide manager
-- Roothide hides jailbreak artifacts; iOSSpoof adds additional hiding at API level
 - `scproxyd` is installed as a tool at `/var/jb/usr/bin/scproxyd`, but is not auto-loaded at boot by default.
 
 ## Config Schema

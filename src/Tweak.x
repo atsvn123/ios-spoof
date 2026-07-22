@@ -1693,8 +1693,6 @@ static void SCInstallMobileGestaltHooks(void) {
             return;
         }
 
-        BOOL kernelMode = NO;
-
         // Đăng ký lắng nghe thay đổi preferences
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
             NULL, SCPostCenter, CFSTR("com.iosspoof.tweak.prefs.changed"), NULL,
@@ -1705,53 +1703,35 @@ static void SCInstallMobileGestaltHooks(void) {
         }
 
         // ObjC hooks
-        // In kernel mode, systemhook already hooks ObjC via method_setImplementation
-        // In user mode, we hook via Logos %hook (method_exchangeImplementations)
-        if (!kernelMode) {
-            %init(_ungrouped);
+        %init(_ungrouped);
 
-            // IDFA hooks (chỉ nếu class tồn tại)
-            Class idfaClass = objc_getClass("ASIdentifierManager");
-            if (idfaClass) %init(IDFA);
+        // IDFA hooks (chỉ nếu class tồn tại)
+        Class idfaClass = objc_getClass("ASIdentifierManager");
+        if (idfaClass) %init(IDFA);
+
+        // C function hooks
+        MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
+        MSHookFunction((void *)&sysctl, (void *)sc_sysctl, (void **)&orig_sysctl);
+
+        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+        if (iokit) {
+            MSHookFunction((void *)&IORegistryEntryCreateCFProperty,
+                           (void *)sc_IORegistryEntryCreateCFProperty,
+                           (void **)&orig_IORegistryEntryCreateCFProperty);
         }
-        // In kernel mode: systemhook handles UIDevice, NSProcessInfo, NWPath, NWInterface,
-        // SCNetworkReachability, CNCopyCurrentNetworkInfo via method_setImplementation
-        // iOSSpoof only needs to handle ObjC hooks that systemhook doesn't cover:
-        // UIScreen, NSLocale, NSTimeZone, NSCalendar, NSDate, NSURL, NSFileManager,
-        // NSMutableURLRequest, NSURLSessionConfiguration, UIApplication, UIWindow, NSBundle
 
-        // C function hooks — split by mode
-        // In kernel mode: systemhook handles ALL C function hooks via litehook
-        // We only keep ObjC hooks (UIDevice, UIScreen, NSProcessInfo, etc.)
-        // because ObjC method swizzling cannot be detected by banking apps
-        // (they look for MSHookFunction instruction patterns, not ObjC method exchange)
-        if (!kernelMode) {
-            // User mode: hook everything ourselves
-            MSHookFunction((void *)&sysctlbyname, (void *)sc_sysctlbyname, (void **)&orig_sysctlbyname);
-            MSHookFunction((void *)&sysctl, (void *)sc_sysctl, (void **)&orig_sysctl);
+        MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
+        MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
+        MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
+        MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
+        MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
+        MSHookFunction((void *)&CFPreferencesCopyAppValue, (void *)sc_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue);
+        MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
+        MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
+        SCInstallWebKitHooks();
+        SCInstallSystemVersionHooks();
+        SCInstallMobileGestaltHooks();
 
-            void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
-            if (iokit) {
-                MSHookFunction((void *)&IORegistryEntryCreateCFProperty,
-                               (void *)sc_IORegistryEntryCreateCFProperty,
-                               (void **)&orig_IORegistryEntryCreateCFProperty);
-            }
-
-            MSHookFunction((void *)&uname, (void *)sc_uname, (void **)&orig_uname);
-            MSHookFunction((void *)&statfs, (void *)sc_statfs, (void **)&orig_statfs);
-            MSHookFunction((void *)&statvfs, (void *)sc_statvfs, (void **)&orig_statvfs);
-            MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
-            MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
-            MSHookFunction((void *)&CFPreferencesCopyAppValue, (void *)sc_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue);
-            MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
-            MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
-            SCInstallWebKitHooks();
-            SCInstallSystemVersionHooks();
-            SCInstallMobileGestaltHooks();
-
-            // User-space hide-jailbreak is kept minimal to avoid banking app crashes.
-            // Path/process anti-detect belongs in roothide systemhook kernel mode.
-        }
-        // In kernel mode, all C hooks are handled by roothide systemhook/litehook.
+        // User-space hide-jailbreak is kept minimal to avoid banking app crashes.
     }
 }

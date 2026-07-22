@@ -272,7 +272,9 @@ static void SCNetworkPrefsChanged(CFNotificationCenterRef center, void *observer
     }
     return m.copy;
 }
-- (NSString *)serviceSubscriberCellularProvidersDidUpdateNotifier { return %orig; }
+- (NSString *)serviceSubscriberCellularProvidersDidUpdateNotifier {
+    return %orig;
+}
 - (NSString *)currentRadioAccessTechnology {
     NSDictionary *sim = SCActiveSIMSlot();
     if (SC_ON() && sim) return sim[@"radioTech"] ?: P().radioTech ?: @"CTRadioAccessTechnologyLTE";

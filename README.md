@@ -90,6 +90,32 @@ ios-spoof/
 
 ## Build
 
+### Read-only KRW diagnostic
+
+The package includes `sckrwprobe`, an optional read-only diagnostic tool. It dynamically loads `libkrw` when available, records exported capabilities, calls only `kbase` and `kread`, validates the in-memory kernel Mach-O header, and extracts `LC_UUID`.
+
+It does not call `kwrite`, `kcall`, `kmalloc`, `physwrite`, or modify kernel state. It does not run automatically and `libkrw` is not a mandatory package dependency.
+
+Run it as root on a test device:
+
+```sh
+/var/jb/usr/bin/sckrwprobe --stdout
+```
+
+The current package is rootless. The local report is written as a root-owned file with mode `0600` to:
+
+```text
+/var/root/Library/Logs/iOSSpoof/sckrwprobe.json
+```
+
+Exit codes:
+
+- `0`: kernel Mach-O and UUID verified successfully.
+- `1`: the local JSON report could not be written.
+- `2`: the report was written, but libkrw or the read-only kernel probe was unavailable or unverified.
+- `64`: invalid command-line argument.
+- `77`: the tool was not run as root.
+
 ### Requirements
 - macOS with Xcode 15+
 - [Theos](https://theos.dev) installed at `$THEOS`

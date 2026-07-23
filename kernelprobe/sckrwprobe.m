@@ -743,8 +743,29 @@ int main(int argc, char *argv[]) {
             return 77;
         }
 
+        // setuid helpers may start as uid=mobile/euid=root. Some KRW providers
+        // check the real uid too, so normalize all ids before loading libkrw.
+        setgid(0);
+        setuid(0);
+
+        int savedStdout = -1;
+        if (printJSON && !cachedOnly) {
+            fflush(stdout);
+            savedStdout = dup(STDOUT_FILENO);
+            if (savedStdout >= 0) {
+                dup2(STDERR_FILENO, STDOUT_FILENO);
+            }
+        }
+
         NSString *cachedError = nil;
         NSDictionary *report = cachedOnly ? SCReadCachedReport(&cachedError) : SCBuildReport(selfTest);
+
+        if (savedStdout >= 0) {
+            fflush(stdout);
+            dup2(savedStdout, STDOUT_FILENO);
+            close(savedStdout);
+        }
+
         if (!report) {
             fprintf(stderr, "%s\n", cachedError.UTF8String ?: "No cached report is available");
             return 2;

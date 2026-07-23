@@ -968,7 +968,6 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                         if (pid1 > 0 && pid1 <= 65535 &&
                             pid2 > 0 && pid2 <= 65535 &&
                             pid3 > 0 && pid3 <= 65535) {
-                            // Extra check: PIDs should be different (unique per process)
                             if (pid1 != pid2 && pid1 != pid3 && pid2 != pid3) {
                                 validPidOff = pidOff;
                                 break;
@@ -978,10 +977,12 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     if (validPidOff == 0) continue;
                     pidValidated++;
 
-                    // Confirmed allproc! Walk the list looking for our PID.
+                    // Confirmed allproc candidate. Walk the list and check ALL
+                    // 4-byte offsets for our target PID (not just validPidOff,
+                    // which might be p_pgrpid or p_uid instead of p_pid).
                     uint64_t procAddr = firstProc;
                     int walkCount = 0;
-                    while (procAddr != 0 && walkCount < 8192) {
+                    while (procAddr != 0 && walkCount < 4096) {
                         if (procAddr == firstProc) {
                             memcpy(walkBuf, firstBuf, procBufSize);
                         } else if (procAddr == leNext1) {
@@ -992,19 +993,29 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                             if (kread(procAddr, walkBuf, procBufSize) != 0) break;
                         }
 
-                        uint32_t pid = *(uint32_t *)(walkBuf + validPidOff);
-                        if (pid == (uint32_t)targetPid) {
-                            free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
-                            diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                            diagnostics[@"allprocOffset"] = @(offset + i);
-                            diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
-                            diagnostics[@"procListOffset"] = @(leOff);
-                            diagnostics[@"procPidOffset"] = @(validPidOff);
-                            diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                            diagnostics[@"scanCandidates"] = @(totalCandidates);
-                            diagnostics[@"lePrevMatched"] = @(lePrevMatched);
-                            diagnostics[@"pidValidated"] = @(pidValidated);
-                            return procAddr;
+                        // Check ALL 4-byte offsets for our target PID
+                        for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                            uint32_t pid = *(uint32_t *)(walkBuf + pidOff);
+                            if (pid == (uint32_t)targetPid) {
+                                // Verify: check 3 procs have valid PIDs at this offset
+                                uint32_t p1 = *(uint32_t *)(firstBuf + pidOff);
+                                uint32_t p2 = *(uint32_t *)(secondBuf + pidOff);
+                                uint32_t p3 = *(uint32_t *)(thirdBuf + pidOff);
+                                if (p1 > 0 && p1 <= 65535 && p2 > 0 && p2 <= 65535 && p3 > 0 && p3 <= 65535 &&
+                                    p1 != p2 && p1 != p3 && p2 != p3) {
+                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                                    diagnostics[@"allprocOffset"] = @(offset + i);
+                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+                                    diagnostics[@"procListOffset"] = @(leOff);
+                                    diagnostics[@"procPidOffset"] = @(pidOff);
+                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
+                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+                                    diagnostics[@"pidValidated"] = @(pidValidated);
+                                    return procAddr;
+                                }
+                            }
                         }
 
                         // Follow le_next

@@ -961,8 +961,12 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     // Pre-validate: find a pidOff where all 3 procs have valid PIDs.
                     // kernel_task has p_pid=0, so allow 0. Require all 3 to be
                     // unique (PIDs are unique per process) and at most 65535.
+                    // Scan ALL offsets 0-256 except the p_list fields themselves,
+                    // because p_pid may be BEFORE p_list in struct proc.
                     size_t validPidOff = 0;
-                    for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                    for (size_t pidOff = 0; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                        // Skip p_list fields (le_next + le_prev = 16 bytes)
+                        if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
                         uint32_t pid1 = *(uint32_t *)(firstBuf + pidOff);
                         uint32_t pid2 = *(uint32_t *)(secondBuf + pidOff);
                         uint32_t pid3 = *(uint32_t *)(thirdBuf + pidOff);
@@ -992,27 +996,28 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                         }
 
                         // Check ALL 4-byte offsets for our target PID
-                        for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                        // Skip only the p_list fields (leOff to leOff+15)
+                        for (size_t pidOff = 0; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                            if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
                             uint32_t pid = *(uint32_t *)(walkBuf + pidOff);
-                            if (pid == (uint32_t)targetPid) {
-                                // Verify: check 3 procs have valid unique PIDs at this offset
-                                uint32_t p1 = *(uint32_t *)(firstBuf + pidOff);
-                                uint32_t p2 = *(uint32_t *)(secondBuf + pidOff);
-                                uint32_t p3 = *(uint32_t *)(thirdBuf + pidOff);
-                                if (p1 <= 65535 && p2 <= 65535 && p3 <= 65535 &&
-                                    p1 != p2 && p1 != p3 && p2 != p3) {
-                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
-                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                                    diagnostics[@"allprocOffset"] = @(offset + i);
-                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
-                                    diagnostics[@"procListOffset"] = @(leOff);
-                                    diagnostics[@"procPidOffset"] = @(pidOff);
-                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
-                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
-                                    diagnostics[@"pidValidated"] = @(pidValidated);
-                                    return procAddr;
-                                }
+                            if (pid != (uint32_t)targetPid) continue;
+                            // Verify: check 3 procs have valid unique PIDs at this offset
+                            uint32_t p1 = *(uint32_t *)(firstBuf + pidOff);
+                            uint32_t p2 = *(uint32_t *)(secondBuf + pidOff);
+                            uint32_t p3 = *(uint32_t *)(thirdBuf + pidOff);
+                            if (p1 <= 65535 && p2 <= 65535 && p3 <= 65535 &&
+                                p1 != p2 && p1 != p3 && p2 != p3) {
+                                free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+                                diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                                diagnostics[@"allprocOffset"] = @(offset + i);
+                                diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+                                diagnostics[@"procListOffset"] = @(leOff);
+                                diagnostics[@"procPidOffset"] = @(pidOff);
+                                diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                diagnostics[@"scanCandidates"] = @(totalCandidates);
+                                diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+                                diagnostics[@"pidValidated"] = @(pidValidated);
+                                return procAddr;
                             }
                         }
 

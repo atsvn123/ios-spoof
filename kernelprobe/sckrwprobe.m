@@ -848,12 +848,13 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
     //            for the first proc in the list.
     //
     // For the first proc: le_prev == &allproc (the address where we found the
-    // pointer in __DATA). This is a very strong invariant.
+    // pointer in __DATA). This is a strong invariant but has ~1800 false
+    // positives (many LIST_HEADs in the kernel).
     //
-    // Since p_list offset varies by XNU version (after lck_mtx_t, p_refcnt,
-    // p_stat, etc.), we scan all 8-byte aligned offsets 0-128 for (le_next,
-    // le_prev) pairs. Each candidate proc is read only once (256 bytes) and
-    // all offset checks are done in-memory, making this very fast.
+    // To filter false positives efficiently, we validate PIDs BEFORE walking
+    // the list: read first 3 procs, check they all have valid PIDs (1-65535)
+    // at the same offset. This eliminates 99% of false positives with just
+    // 3 kreads instead of walking 8192-entry lists.
 
     const size_t chunkSize = 8192;
     const size_t procBufSize = 256;
@@ -863,9 +864,10 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
     uint8_t *chunk = malloc(chunkSize);
     uint8_t *firstBuf = malloc(procBufSize);
     uint8_t *secondBuf = malloc(procBufSize);
+    uint8_t *thirdBuf = malloc(procBufSize);
     uint8_t *walkBuf = malloc(procBufSize);
-    if (!chunk || !firstBuf || !secondBuf || !walkBuf) {
-        free(chunk); free(firstBuf); free(secondBuf); free(walkBuf);
+    if (!chunk || !firstBuf || !secondBuf || !thirdBuf || !walkBuf) {
+        free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
         return 0;
     }
 
@@ -904,6 +906,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
 
     int totalCandidates = 0;
     int lePrevMatched = 0;
+    int pidValidated = 0;
 
     for (int si = 0; si < scanCount; si++) {
         uint64_t scanAddr = scans[si].addr;
@@ -925,7 +928,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
 
                 uint64_t allprocAddr = scanAddr + offset + i;
 
-                // Read first proc struct once (256 bytes covers p_list + p_pid)
+                // Read first proc struct once
                 if (kread(firstProc, firstBuf, procBufSize) != 0) continue;
 
                 // Scan all possible p_list offsets (8-byte aligned, 0-128)
@@ -945,8 +948,37 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     if (leNext2 != 0 && !SCKernelPtrValid(leNext2)) continue;
                     lePrevMatched++;
 
-                    // Found allproc! p_list is at offset leOff.
-                    // Walk the list and find p_pid by scanning 4-byte aligned offsets.
+                    // Read third proc for PID validation
+                    uint64_t thirdProc = leNext2;
+                    if (thirdProc == 0 || !SCKernelPtrValid(thirdProc)) continue;
+                    if (kread(thirdProc, thirdBuf, procBufSize) != 0) continue;
+                    uint64_t leNext3 = *(uint64_t *)(thirdBuf + leOff);
+                    uint64_t lePrev3 = *(uint64_t *)(thirdBuf + leOff + 8);
+                    if (lePrev3 != leNext1) continue;
+                    if (leNext3 != 0 && !SCKernelPtrValid(leNext3)) continue;
+
+                    // Pre-validate: find a pidOff where all 3 procs have valid PIDs.
+                    // This filters out non-proc linked lists (which won't have valid
+                    // PIDs at the same offset across 3 entries).
+                    size_t validPidOff = 0;
+                    for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                        uint32_t pid1 = *(uint32_t *)(firstBuf + pidOff);
+                        uint32_t pid2 = *(uint32_t *)(secondBuf + pidOff);
+                        uint32_t pid3 = *(uint32_t *)(thirdBuf + pidOff);
+                        if (pid1 > 0 && pid1 <= 65535 &&
+                            pid2 > 0 && pid2 <= 65535 &&
+                            pid3 > 0 && pid3 <= 65535) {
+                            // Extra check: PIDs should be different (unique per process)
+                            if (pid1 != pid2 && pid1 != pid3 && pid2 != pid3) {
+                                validPidOff = pidOff;
+                                break;
+                            }
+                        }
+                    }
+                    if (validPidOff == 0) continue;
+                    pidValidated++;
+
+                    // Confirmed allproc! Walk the list looking for our PID.
                     uint64_t procAddr = firstProc;
                     int walkCount = 0;
                     while (procAddr != 0 && walkCount < 8192) {
@@ -954,48 +986,25 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                             memcpy(walkBuf, firstBuf, procBufSize);
                         } else if (procAddr == leNext1) {
                             memcpy(walkBuf, secondBuf, procBufSize);
+                        } else if (procAddr == thirdProc) {
+                            memcpy(walkBuf, thirdBuf, procBufSize);
                         } else {
                             if (kread(procAddr, walkBuf, procBufSize) != 0) break;
                         }
 
-                        // Skip the p_list fields themselves
-                        for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
-                            uint32_t pid = *(uint32_t *)(walkBuf + pidOff);
-                            if (pid != (uint32_t)targetPid) continue;
-
-                            // Validate: check a few other procs have valid PIDs at same offset
-                            uint64_t vp = firstProc;
-                            int vc = 0;
-                            int validPids = 0;
-                            uint8_t vbufTmp[256];
-                            while (vp != 0 && vc < 5) {
-                                uint8_t *vbuf;
-                                if (vp == firstProc) {
-                                    vbuf = firstBuf;
-                                } else if (vp == leNext1) {
-                                    vbuf = secondBuf;
-                                } else {
-                                    if (kread(vp, vbufTmp, procBufSize) != 0) break;
-                                    vbuf = vbufTmp;
-                                }
-                                uint32_t vpid = *(uint32_t *)(vbuf + pidOff);
-                                if (vpid > 0 && vpid <= 65535) validPids++;
-                                vp = *(uint64_t *)(vbuf + leOff);
-                                if (vp != 0 && !SCKernelPtrValid(vp)) break;
-                                vc++;
-                            }
-                            if (validPids >= 3) {
-                                free(chunk); free(firstBuf); free(secondBuf); free(walkBuf);
-                                diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                                diagnostics[@"allprocOffset"] = @(offset + i);
-                                diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
-                                diagnostics[@"procListOffset"] = @(leOff);
-                                diagnostics[@"procPidOffset"] = @(pidOff);
-                                diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                                diagnostics[@"scanCandidates"] = @(totalCandidates);
-                                diagnostics[@"lePrevMatched"] = @(lePrevMatched);
-                                return procAddr;
-                            }
+                        uint32_t pid = *(uint32_t *)(walkBuf + validPidOff);
+                        if (pid == (uint32_t)targetPid) {
+                            free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+                            diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                            diagnostics[@"allprocOffset"] = @(offset + i);
+                            diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+                            diagnostics[@"procListOffset"] = @(leOff);
+                            diagnostics[@"procPidOffset"] = @(validPidOff);
+                            diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                            diagnostics[@"scanCandidates"] = @(totalCandidates);
+                            diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+                            diagnostics[@"pidValidated"] = @(pidValidated);
+                            return procAddr;
                         }
 
                         // Follow le_next
@@ -1010,9 +1019,10 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
         }
     }
 
-    free(chunk); free(firstBuf); free(secondBuf); free(walkBuf);
+    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
     diagnostics[@"scanCandidates"] = @(totalCandidates);
     diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+    diagnostics[@"pidValidated"] = @(pidValidated);
     return 0;
 }
 

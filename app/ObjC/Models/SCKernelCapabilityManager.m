@@ -117,7 +117,8 @@ static BOOL SCIsBooleanFalse(id value) {
         [transactionState isEqualToString:@"quarantined"];
     BOOL vfsTestAttempted = [transactionState isEqualToString:@"vfsTestAttempted"] ||
         [transactionState isEqualToString:@"vfsTestVerified"] ||
-        [transactionState isEqualToString:@"vfsTestFailed"];
+        [transactionState isEqualToString:@"vfsTestFailed"] ||
+        [transactionState isEqualToString:@"vfsTestUnsupported"];
 
     if (![safety[@"vnodeMutationCalled"] isKindOfClass:NSNumber.class]) return NO;
     if (!vfsTestAttempted && [safety[@"vnodeMutationCalled"] boolValue]) return NO;

@@ -186,7 +186,21 @@ This profile is marked `L4` and `mutationAllowed = false`. It only authorizes re
 
 ### Phase 2B VFS test fixture
 
-The `--vfstest` argument creates a test file owned by the probe, attempts to find its vnode through the proc/fd chain, toggles `VISSHADOW`, validates via direct `syscall(SYS_access)`, then restores original `v_flags`. If the provider lacks `kcall` or allproc offset discovery is not yet implemented, the VFS test reports `unsupported` without modifying any kernel data.
+The `--vfstest` argument creates a test file owned by the probe, finds its vnode through the proc/fd chain, toggles `VISSHADOW`, validates via `access()`, then restores original `v_flags`.
+
+The vnode is found by:
+1. Parsing kernel Mach-O `LC_SEGMENT_64` to locate `__DATA,__common` and `__DATA,__bss` sections
+2. Scanning those sections for `allproc` (a linked list of all processes)
+3. Walking the proc list to find the current process by matching `p_pid`
+4. Following the fd chain: `proc → filedesc → fd_ofiles[fd] → fileproc → fileglob → vnode`
+
+Offsets for `p_fd`, `fd_ofiles`, `f_fglob`, and `fg_data` are found dynamically by scanning struct layouts at runtime (validating pointer chains at each level). Only `p_pid` (0x60) and `v_flag` (0x54) are hardcoded for the T8015/iOS 16.7.x profile.
+
+Safety:
+- `vnodeMutationCalled` is set to `true` only after a successful `kwrite` to `v_flags`
+- The original `v_flags` is always restored; if restore fails, the state is `quarantined`
+- `access()` is called before and after toggling to verify visibility changes
+- The test fixture file is cleaned up (closed + unlinked) on all paths
 
 The VFS test does not hide `/var/jb`, bootstrap artifacts, or any path not created by the probe itself.
 

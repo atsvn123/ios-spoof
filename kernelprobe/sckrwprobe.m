@@ -24,13 +24,11 @@
 #define VISSHADOW 0x008000
 #endif
 
+// XNU 8792 (iOS 16.7.x) arm64 offsets
+// p_pid and v_flag are hardcoded; all other offsets are found dynamically
+// by scanning struct layouts at runtime.
 #define SC_VNODE_V_FLAGS_OFF_T8015_167  0x54
 #define SC_PROC_PID_OFF_T8015_167       0x60
-#define SC_PROC_FD_OFF_T8015_167        0x18
-#define SC_PROC_TASK_OFF_T8015_167      0x00
-#define SC_FDESC_OFILES_OFF_T8015_167   0x00
-#define SC_FILEPROC_FG_OFF_T8015_167    0x10
-#define SC_FILEGLOB_DATA_OFF_T8015_167  0x28
 
 typedef int (*SCKBaseFunction)(uint64_t *address);
 typedef int (*SCKReadFunction)(uint64_t address, void *buffer, size_t length);
@@ -729,16 +727,283 @@ static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadF
 
 // Phase 2B: VFS test fixture backend
 // Creates a test file, finds its vnode via proc/fd chain, toggles VISSHADOW,
-// validates via direct syscall, then restores original v_flags.
+// validates via access(), then restores original v_flags.
+//
+// The allproc symbol is found by scanning kernel __DATA,__common/__bss for a
+// pointer whose target looks like a proc struct (valid p_pid at offset 0x60,
+// valid le_next at offset 0x0). The proc list is walked to find the current
+// process. The fd chain (proc -> filedesc -> ofiles[fd] -> fileproc ->
+// fileglob -> vnode) is resolved by scanning struct layouts dynamically
+// rather than relying on hardcoded offsets (except p_pid and v_flag).
 
-static NSDictionary *SCRunVFSTest(SCKReadFunction kreadFunction, SCKWriteFunction kwriteFunction) {
+static BOOL SCKernelPtrValid(uint64_t addr) {
+    return addr >= 0xFFFFFFF000000000ULL;
+}
+
+typedef struct {
+    BOOL valid;
+    uint64_t commonAddr;
+    uint64_t commonSize;
+    uint64_t bssAddr;
+    uint64_t bssSize;
+} SCKernelDataSections;
+
+static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
+                                 SCKernelDataSections *out) {
+    memset(out, 0, sizeof(*out));
+    out->valid = NO;
+
+    struct mach_header_64 header = {0};
+    if (kread(kernelBase, &header, sizeof(header)) != 0) return NO;
+    if (header.magic != MH_MAGIC_64 || header.filetype != MH_EXECUTE) return NO;
+    if (header.ncmds == 0 || header.ncmds > SCMaxLoadCommands) return NO;
+    if (header.sizeofcmds < sizeof(struct load_command) || header.sizeofcmds > SCMaxLoadCommandBytes) return NO;
+
+    uint8_t *commands = malloc(header.sizeofcmds);
+    if (!commands) return NO;
+    if (kread(kernelBase + sizeof(header), commands, header.sizeofcmds) != 0) {
+        free(commands);
+        return NO;
+    }
+
+    uint64_t textVmaddr = 0;
+    BOOL foundText = NO;
+    const uint8_t *ptr = commands;
+    NSUInteger remaining = header.sizeofcmds;
+    for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
+        const struct load_command *cmd = (const struct load_command *)ptr;
+        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
+        if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
+            if (strcmp(seg->segname, "__TEXT") == 0) {
+                textVmaddr = seg->vmaddr;
+                foundText = YES;
+                break;
+            }
+        }
+        ptr += cmd->cmdsize;
+        remaining -= cmd->cmdsize;
+    }
+    if (!foundText) { free(commands); return NO; }
+
+    int64_t slide = (int64_t)(kernelBase - textVmaddr);
+
+    ptr = commands;
+    remaining = header.sizeofcmds;
+    for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
+        const struct load_command *cmd = (const struct load_command *)ptr;
+        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
+        if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
+            if (strcmp(seg->segname, "__DATA") == 0 && seg->nsects > 0) {
+                const struct section_64 *sect = (const struct section_64 *)(ptr + sizeof(struct segment_command_64));
+                size_t sectionArraySize = (size_t)seg->nsects * sizeof(struct section_64);
+                if (sectionArraySize <= cmd->cmdsize - sizeof(struct segment_command_64)) {
+                    for (uint32_t j = 0; j < seg->nsects; j++) {
+                        if (strcmp(sect[j].sectname, "__common") == 0) {
+                            out->commonAddr = sect[j].addr + slide;
+                            out->commonSize = sect[j].size;
+                        } else if (strcmp(sect[j].sectname, "__bss") == 0) {
+                            out->bssAddr = sect[j].addr + slide;
+                            out->bssSize = sect[j].size;
+                        }
+                    }
+                }
+            }
+        }
+        ptr += cmd->cmdsize;
+        remaining -= cmd->cmdsize;
+    }
+
+    free(commands);
+    out->valid = (out->commonSize > 0 || out->bssSize > 0);
+    return out->valid;
+}
+
+static uint64_t SCFindCurrentProc(SCKReadFunction kread,
+                                   SCKernelDataSections *sections,
+                                   pid_t targetPid,
+                                   NSMutableDictionary *diagnostics) {
+    const size_t chunkSize = 4096;
+    uint8_t *chunk = malloc(chunkSize);
+    if (!chunk) return 0;
+
+    struct { uint64_t addr; uint64_t size; const char *name; } scans[] = {
+        { sections->commonAddr, sections->commonSize, "__common" },
+        { sections->bssAddr, sections->bssSize, "__bss" }
+    };
+
+    for (int si = 0; si < 2; si++) {
+        uint64_t scanAddr = scans[si].addr;
+        uint64_t scanSize = scans[si].size;
+        if (scanAddr == 0 || scanSize == 0) continue;
+        if (scanSize > 2 * 1024 * 1024) scanSize = 2 * 1024 * 1024;
+
+        for (uint64_t offset = 0; offset < scanSize; offset += chunkSize - 8) {
+            size_t readSize = chunkSize;
+            if (offset + readSize > scanSize) readSize = (size_t)(scanSize - offset);
+            if (readSize < 16) break;
+
+            if (kread(scanAddr + offset, chunk, readSize) != 0) continue;
+
+            for (size_t i = 0; i + 8 <= readSize; i += 8) {
+                uint64_t candidate = *(uint64_t *)(chunk + i);
+                if (!SCKernelPtrValid(candidate)) continue;
+
+                uint32_t pid = 0;
+                if (kread(candidate + SC_PROC_PID_OFF_T8015_167, &pid, 4) != 0) continue;
+                if (pid > 65535) continue;
+
+                uint64_t leNext = 0;
+                if (kread(candidate, &leNext, 8) != 0) continue;
+                if (leNext != 0 && !SCKernelPtrValid(leNext)) continue;
+
+                if (leNext != 0) {
+                    uint32_t nextPid = 0;
+                    if (kread(leNext + SC_PROC_PID_OFF_T8015_167, &nextPid, 4) != 0) continue;
+                    if (nextPid > 65535) continue;
+                }
+
+                uint64_t procAddr = candidate;
+                int walkCount = 0;
+                while (procAddr != 0 && walkCount < 8192) {
+                    if (kread(procAddr + SC_PROC_PID_OFF_T8015_167, &pid, 4) != 0) break;
+                    if (pid == (uint32_t)targetPid) {
+                        free(chunk);
+                        diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                        diagnostics[@"allprocOffset"] = @(offset + i);
+                        diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                        return procAddr;
+                    }
+                    if (kread(procAddr, &procAddr, 8) != 0) break;
+                    if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
+                    walkCount++;
+                }
+            }
+        }
+    }
+
+    free(chunk);
+    return 0;
+}
+
+static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd,
+                                 NSMutableDictionary *diagnostics) {
+    const size_t procReadSize = 1024;
+    uint8_t procData[1024];
+    if (kread(procAddr, procData, procReadSize) != 0) {
+        diagnostics[@"fdChainError"] = @"could not read proc struct";
+        return 0;
+    }
+
+    uint64_t fdesc = 0;
+    uint64_t ofiles = 0;
+    uint64_t fileproc = 0;
+    size_t fdOff = 0;
+    size_t ofilesOff = 0;
+
+    for (fdOff = 0; fdOff + 8 <= procReadSize; fdOff += 8) {
+        uint64_t candidate = *(uint64_t *)(procData + fdOff);
+        if (!SCKernelPtrValid(candidate)) continue;
+
+        uint8_t fdescData[64];
+        if (kread(candidate, fdescData, 64) != 0) continue;
+
+        for (ofilesOff = 0; ofilesOff + 8 <= 64; ofilesOff += 8) {
+            uint64_t ofilesCandidate = *(uint64_t *)(fdescData + ofilesOff);
+            if (!SCKernelPtrValid(ofilesCandidate)) continue;
+
+            uint64_t fpCandidate = 0;
+            if (kread(ofilesCandidate + (uint64_t)fd * 8, &fpCandidate, 8) != 0) continue;
+            if (!SCKernelPtrValid(fpCandidate)) continue;
+
+            fdesc = candidate;
+            ofiles = ofilesCandidate;
+            fileproc = fpCandidate;
+            break;
+        }
+        if (fdesc != 0) break;
+    }
+
+    if (fdesc == 0) {
+        diagnostics[@"fdChainError"] = @"could not find filedesc pointer in proc struct";
+        return 0;
+    }
+
+    diagnostics[@"procFdOffset"] = @(fdOff);
+    diagnostics[@"fdescAddress"] = SCHexAddress(fdesc);
+    diagnostics[@"fdescOfilesOffset"] = @(ofilesOff);
+    diagnostics[@"ofilesAddress"] = SCHexAddress(ofiles);
+    diagnostics[@"fileprocAddress"] = SCHexAddress(fileproc);
+
+    uint8_t fpData[64];
+    if (kread(fileproc, fpData, 64) != 0) {
+        diagnostics[@"fdChainError"] = @"could not read fileproc struct";
+        return 0;
+    }
+
+    uint64_t fileglob = 0;
+    size_t fgOff = 0;
+    for (fgOff = 0; fgOff + 8 <= 64; fgOff += 8) {
+        uint64_t candidate = *(uint64_t *)(fpData + fgOff);
+        if (!SCKernelPtrValid(candidate)) continue;
+
+        uint8_t fgData[128];
+        if (kread(candidate, fgData, 128) != 0) continue;
+
+        for (size_t dataOff = 0; dataOff + 8 <= 128; dataOff += 8) {
+            uint64_t vnodeCandidate = *(uint64_t *)(fgData + dataOff);
+            if (!SCKernelPtrValid(vnodeCandidate)) continue;
+
+            uint32_t flags = 0;
+            if (kread(vnodeCandidate + SC_VNODE_V_FLAGS_OFF_T8015_167, &flags, 4) != 0) continue;
+            if (flags == 0 || flags == 0xFFFFFFFF || flags > 0xFFFFF) continue;
+            if (flags & VISSHADOW) continue;
+
+            fileglob = candidate;
+            diagnostics[@"fileprocFgOffset"] = @(fgOff);
+            diagnostics[@"fileglobAddress"] = SCHexAddress(fileglob);
+            diagnostics[@"fileglobDataOffset"] = @(dataOff);
+            diagnostics[@"vnodeAddress"] = SCHexAddress(vnodeCandidate);
+            return vnodeCandidate;
+        }
+    }
+
+    diagnostics[@"fdChainError"] = @"could not find vnode via fileproc -> fileglob chain";
+    return 0;
+}
+
+static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
+                                   SCKReadFunction kreadFunction,
+                                   SCKWriteFunction kwriteFunction) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"state"] = @"probing";
     result[@"vnodeHideVerified"] = @NO;
     result[@"syscallVerified"] = @NO;
     result[@"rollbackVerified"] = @NO;
+    result[@"vnodeMutationCalled"] = @NO;
 
-    // Create test fixture file
+    uint64_t kernelBase = 0;
+    if (kbaseFunction(&kernelBase) != 0 || !SCValidateKernelAddress(kernelBase)) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"could not get kernel base";
+        result[@"vnodeAddress"] = @"0x0";
+        return result;
+    }
+    result[@"kernelBase"] = SCHexAddress(kernelBase);
+
+    SCKernelDataSections sections = {0};
+    if (!SCParseDataSections(kreadFunction, kernelBase, &sections)) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"could not parse kernel __DATA sections";
+        result[@"vnodeAddress"] = @"0x0";
+        return result;
+    }
+    result[@"commonSectionAddr"] = SCHexAddress(sections.commonAddr);
+    result[@"commonSectionSize"] = @(sections.commonSize);
+    result[@"bssSectionAddr"] = SCHexAddress(sections.bssAddr);
+    result[@"bssSectionSize"] = @(sections.bssSize);
+
     NSString *fixturePath = @"/var/root/Library/Logs/iOSSpoof/vfs_test_fixture";
     NSString *fixtureDir = [fixturePath stringByDeletingLastPathComponent];
     [NSFileManager.defaultManager createDirectoryAtPath:fixtureDir withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions: @0700} error:nil];
@@ -753,10 +1018,8 @@ static NSDictionary *SCRunVFSTest(SCKReadFunction kreadFunction, SCKWriteFunctio
     }
     write(fd, "iOSSpoof-VFS-Test\n", 18);
     lseek(fd, 0, SEEK_SET);
-
     result[@"fixturePath"] = fixturePath;
 
-    // Verify file is visible before hiding
     int accessBefore = access(path, F_OK);
     result[@"accessBeforeHide"] = @(accessBefore == 0);
     if (accessBefore != 0) {
@@ -767,13 +1030,120 @@ static NSDictionary *SCRunVFSTest(SCKReadFunction kreadFunction, SCKWriteFunctio
         return result;
     }
 
-    // VFS vnode hiding requires finding the current proc's vnode chain:
-    // allproc -> proc -> p_fd -> fd_ofiles[fd] -> fp -> f_fglob -> fg_data -> vnode
-    // Without kcall or kernel symbol scanning, we cannot locate allproc.
-    // For Phase 2B safety, we do NOT implement kernel text scanning yet.
-    result[@"state"] = @"unsupported";
-    result[@"error"] = @"VFS test requires allproc offset or kcall to find current proc; not available in this provider";
-    result[@"vnodeAddress"] = @"0x0";
+    pid_t targetPid = getpid();
+    result[@"targetPid"] = @(targetPid);
+
+    uint64_t procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result);
+    if (procAddr == 0) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"could not find current proc in allproc list";
+        result[@"vnodeAddress"] = @"0x0";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+
+    uint64_t vnodeAddr = SCFollowFdChain(kreadFunction, procAddr, fd, result);
+    if (vnodeAddr == 0) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = result[@"fdChainError"] ?: @"could not follow fd chain to vnode";
+        result[@"vnodeAddress"] = @"0x0";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+
+    uint32_t originalFlags = 0;
+    if (kreadFunction(vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, &originalFlags, 4) != 0) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"could not read vnode v_flags";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+    result[@"originalVFlags"] = [NSString stringWithFormat:@"0x%08x", originalFlags];
+
+    if (originalFlags & VISSHADOW) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"VISSHADOW already set on vnode; v_flags offset may be incorrect";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+
+    uint32_t newFlags = originalFlags ^ VISSHADOW;
+    result[@"vnodeMutationCalled"] = @YES;
+    int writeStatus = kwriteFunction(&newFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+    result[@"vflagsWriteStatus"] = SCStatusString(writeStatus);
+    if (writeStatus != 0) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"kwrite failed to toggle VISSHADOW";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+
+    uint32_t afterWriteFlags = 0;
+    if (kreadFunction(vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, &afterWriteFlags, 4) != 0) {
+        result[@"state"] = @"quarantined";
+        result[@"error"] = @"kread failed to verify v_flags after write; attempting restore";
+        kwriteFunction(&originalFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+        close(fd);
+        unlink(path);
+        return result;
+    }
+    result[@"afterWriteVFlags"] = [NSString stringWithFormat:@"0x%08x", afterWriteFlags];
+    if (afterWriteFlags != newFlags) {
+        result[@"state"] = @"quarantined";
+        result[@"error"] = @"v_flags write did not produce expected value; restoring";
+        kwriteFunction(&originalFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+        close(fd);
+        unlink(path);
+        return result;
+    }
+    result[@"vnodeHideVerified"] = @YES;
+
+    int accessAfterHide = access(path, F_OK);
+    result[@"accessAfterHide"] = @(accessAfterHide == 0);
+    result[@"syscallVerified"] = @(accessAfterHide != 0);
+
+    int restoreStatus = kwriteFunction(&originalFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+    result[@"vflagsRestoreStatus"] = SCStatusString(restoreStatus);
+    if (restoreStatus != 0) {
+        result[@"state"] = @"quarantined";
+        result[@"error"] = @"kwrite failed to restore original v_flags";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+
+    uint32_t verifyFlags = 0;
+    if (kreadFunction(vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, &verifyFlags, 4) != 0) {
+        result[@"state"] = @"quarantined";
+        result[@"error"] = @"kread failed to verify v_flags restoration";
+        close(fd);
+        unlink(path);
+        return result;
+    }
+    result[@"restoredVFlags"] = [NSString stringWithFormat:@"0x%08x", verifyFlags];
+    result[@"rollbackVerified"] = @(verifyFlags == originalFlags);
+
+    int accessAfterRestore = access(path, F_OK);
+    result[@"accessAfterRestore"] = @(accessAfterRestore == 0);
+
+    if (verifyFlags != originalFlags) {
+        result[@"state"] = @"quarantined";
+        result[@"error"] = @"v_flags was not restored correctly";
+    } else if (accessAfterHide == 0) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"file remained visible after VISSHADOW toggle; v_flags offset may be incorrect";
+    } else if (accessAfterRestore != 0) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"file not accessible after v_flags restoration";
+    } else {
+        result[@"state"] = @"verified";
+    }
+
     close(fd);
     unlink(path);
     return result;
@@ -859,6 +1229,7 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
         report[@"transactionState"] = @"readOnly";
     }
     BOOL canRunVFSTest = shouldRunVFSTest &&
+        kbaseFunction != NULL &&
         kreadFunction != NULL &&
         [[exports objectForKey:@"kwrite"] boolValue] &&
         [[krw[@"kernelProbe"] objectForKey:@"machOValidated"] boolValue];
@@ -866,14 +1237,23 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
     if (canRunVFSTest) {
         SCKWriteFunction kwriteFunction = (SCKWriteFunction)dlsym(handle, "kwrite");
         if (kwriteFunction) {
-            NSDictionary *vfsTest = SCRunVFSTest(kreadFunction, kwriteFunction);
+            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction);
             krw[@"vfsTest"] = vfsTest;
 
             NSMutableDictionary *safety = [report[@"safety"] mutableCopy];
             safety[@"vnodeMutationCalled"] = @([vfsTest[@"vnodeMutationCalled"] boolValue]);
             report[@"safety"] = safety;
 
-            if (!report[@"transactionState"] || [report[@"transactionState"] isEqualToString:@"readOnly"]) {
+            NSString *vfsState = vfsTest[@"state"];
+            if ([vfsState isEqualToString:@"verified"]) {
+                report[@"transactionState"] = @"vfsTestVerified";
+            } else if ([vfsState isEqualToString:@"failed"]) {
+                report[@"transactionState"] = @"vfsTestFailed";
+            } else if ([vfsState isEqualToString:@"quarantined"]) {
+                report[@"transactionState"] = @"quarantined";
+            } else if ([vfsState isEqualToString:@"unsupported"]) {
+                report[@"transactionState"] = @"vfsTestUnsupported";
+            } else {
                 report[@"transactionState"] = @"vfsTestAttempted";
             }
         } else {

@@ -6,5 +6,10 @@
     <!-- libkrw-dopamine does not need this entitlement. -->
     <key>task_for_pid-allow</key>
     <true/>
+    <!-- Required by libkrw-dopamine for kalloc/kmap/kcall primitives. -->
+    <key>com.apple.security.exception.iokit-user-client-class</key>
+    <array>
+        <string>IOSurfaceRootUserClient</string>
+    </array>
 </dict>
 </plist>

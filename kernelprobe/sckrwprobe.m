@@ -33,6 +33,7 @@ typedef int (*SCKReadFunction)(uint64_t address, void *buffer, size_t length);
 typedef int (*SCKWriteFunction)(void *from, uint64_t to, size_t length);
 typedef int (*SCKMallocFunction)(uint64_t *addr, size_t size);
 typedef int (*SCKDeallocFunction)(uint64_t addr, size_t size);
+typedef uint64_t (*SCKCallFunction)(uint64_t func, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7);
 
 static NSString * const SCProbeVersion = @"2";
 static NSString * const SCReportPath = @"/var/root/Library/Logs/iOSSpoof/sckrwprobe.json";
@@ -739,6 +740,103 @@ static BOOL SCKernelPtrValid(uint64_t addr) {
     return addr >= 0xFFFFFFF000000000ULL;
 }
 
+// Find current_proc() function address in kernel __TEXT segment.
+// On arm64, current_proc() is a small function that reads TPIDR_EL1 and
+// follows pointers: cpu_data -> cpu_running_thread -> task -> bsd_info.
+// We scan __TEXT for the function signature pattern.
+static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase,
+                                       uint64_t *textAddr, uint64_t *textSize) {
+    struct mach_header_64 header = {0};
+    if (kread(kernelBase, &header, sizeof(header)) != 0) return 0;
+    if (header.magic != MH_MAGIC_64 || header.ncmds == 0 || header.ncmds > SCMaxLoadCommands) return 0;
+
+    uint8_t *commands = malloc(header.sizeofcmds);
+    if (!commands) return 0;
+    if (kread(kernelBase + sizeof(header), commands, header.sizeofcmds) != 0) {
+        free(commands);
+        return 0;
+    }
+
+    uint64_t textVmaddr = 0, textVmsize = 0;
+    const uint8_t *ptr = commands;
+    NSUInteger remaining = header.sizeofcmds;
+    for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
+        const struct load_command *cmd = (const struct load_command *)ptr;
+        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
+        if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
+            if (strcmp(seg->segname, "__TEXT") == 0) {
+                textVmaddr = seg->vmaddr;
+                textVmsize = seg->vmsize;
+                break;
+            }
+        }
+        ptr += cmd->cmdsize;
+        remaining -= cmd->cmdsize;
+    }
+    free(commands);
+    if (textVmaddr == 0) return 0;
+
+    int64_t slide = (int64_t)(kernelBase - textVmaddr);
+    uint64_t textAddr = textVmaddr + slide;
+    if (textAddr) *textAddr = textAddr;
+    if (textSize) *textSize = textVmsize;
+
+    // Scan __TEXT for current_proc() pattern.
+    // arm64 current_proc typically starts with:
+    //   mrs x0, TPIDR_EL1     (0xd5384080  0xd5384020)
+    //   ldr x0, [x0, #...]    (0xf940xxxx)
+    //   ldr x0, [x0, #...]    (0xf940xxxx)
+    //   ldr x0, [x0, #...]    (0xf940xxxx)
+    //   ret                    (0xd65f03c0)
+    //
+    // We scan for: mrs x0, TPIDR_EL1 followed within 32 bytes by ret
+    const size_t scanChunk = 8192;
+    uint8_t *chunk = malloc(scanChunk);
+    if (!chunk) return 0;
+
+    uint64_t scanEnd = textVmsize;
+    if (scanEnd > 16 * 1024 * 1024) scanEnd = 16 * 1024 * 1024;
+
+    for (uint64_t off = 0; off < scanEnd; off += scanChunk - 32) {
+        size_t readSize = scanChunk;
+        if (off + readSize > scanEnd) readSize = (size_t)(scanEnd - off);
+        if (readSize < 32) break;
+
+        if (kread(textAddr + off, chunk, readSize) != 0) continue;
+
+        for (size_t i = 0; i + 32 <= readSize; i += 4) {
+            uint32_t insn = *(uint32_t *)(chunk + i);
+            // mrs x0, TPIDR_EL1: 0xd5384080
+            if (insn != 0xd5384080) continue;
+
+            // Look for ret within next 28 bytes (7 instructions)
+            BOOL hasRet = NO;
+            for (size_t j = 4; j <= 28; j += 4) {
+                uint32_t next = *(uint32_t *)(chunk + i + j);
+                if (next == 0xd65f03c0) { hasRet = YES; break; }
+            }
+            if (!hasRet) continue;
+
+            // Check that instructions between mrs and ret are ldr x0
+            BOOL valid = YES;
+            for (size_t j = 4; j <= 24; j += 4) {
+                uint32_t next = *(uint32_t *)(chunk + i + j);
+                if (next == 0xd65f03c0) break;
+                // ldr x0, [x0, #imm]: 0xf9400xxx (bits 31-22 = 1111100101, Rt=0)
+                if ((next & 0xFFC003FF) != 0xF9400000) { valid = NO; break; }
+            }
+            if (!valid) continue;
+
+            free(chunk);
+            return textAddr + off + i;
+        }
+    }
+
+    free(chunk);
+    return 0;
+}
+
 typedef struct {
     BOOL valid;
     uint64_t commonAddr;
@@ -1123,7 +1221,8 @@ static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd
 
 static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
                                    SCKReadFunction kreadFunction,
-                                   SCKWriteFunction kwriteFunction) {
+                                   SCKWriteFunction kwriteFunction,
+                                   SCKCallFunction kcallFunction) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"state"] = @"probing";
     result[@"vnodeHideVerified"] = @NO;
@@ -1187,10 +1286,37 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     pid_t targetPid = getpid();
     result[@"targetPid"] = @(targetPid);
 
-    uint64_t procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result);
+    // Try kcall(current_proc) first — much simpler than allproc scanning
+    uint64_t procAddr = 0;
+    if (kcallFunction) {
+        uint64_t textAddr = 0, textSize = 0;
+        uint64_t currentProcFunc = SCFindCurrentProcFunc(kreadFunction, kernelBase, &textAddr, &textSize);
+        result[@"currentProcFuncAddr"] = currentProcFunc ? SCHexAddress(currentProcFunc) : @"0x0";
+        if (currentProcFunc) {
+            uint64_t callResult = kcallFunction(currentProcFunc, 0, 0, 0, 0, 0, 0, 0);
+            result[@"kcallCurrentProc"] = SCHexAddress(callResult);
+            if (SCKernelPtrValid(callResult)) {
+                // Verify: read 16 bytes at procAddr, check it looks like a proc
+                uint8_t procData[16];
+                if (kreadFunction(callResult, procData, 16) == 0) {
+                    procAddr = callResult;
+                    result[@"procSource"] = @"kcall";
+                    result[@"procAddress"] = SCHexAddress(procAddr);
+                }
+            }
+        }
+    }
+
+    // Fallback: allproc scanning
+    if (procAddr == 0) {
+        procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result);
+        if (procAddr) {
+            result[@"procSource"] = @"allproc";
+        }
+    }
     if (procAddr == 0) {
         result[@"state"] = @"unsupported";
-        result[@"error"] = @"could not find current proc in allproc list";
+        result[@"error"] = @"could not find current proc (kcall and allproc scanning both failed)";
         result[@"vnodeAddress"] = @"0x0";
         close(fd);
         unlink(path);
@@ -1394,7 +1520,8 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
     if (canRunVFSTest) {
         SCKWriteFunction kwriteFunction = (SCKWriteFunction)dlsym(handle, "kwrite");
         if (kwriteFunction) {
-            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction);
+            SCKCallFunction kcallFunction = (SCKCallFunction)dlsym(handle, "kcall");
+            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction, kcallFunction);
             krw[@"vfsTest"] = vfsTest;
 
             NSMutableDictionary *safety = [report[@"safety"] mutableCopy];

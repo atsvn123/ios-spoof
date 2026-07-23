@@ -2,6 +2,7 @@
 #import "Controllers/SCStatusViewController.h"
 #import "Controllers/SCDeviceViewController.h"
 #import "Controllers/SCAppsViewController.h"
+#import "Controllers/SCKernelViewController.h"
 #import "Controllers/SCSpoofViewController.h"
 
 static UINavigationController *SCNav(UIViewController *vc, NSString *title, NSString *imageName) {
@@ -23,7 +24,8 @@ static UINavigationController *SCNav(UIViewController *vc, NSString *title, NSSt
             SCNav([SCStatusViewController new], @"Status", @"shield.lefthalf.fill"),
             SCNav([SCDeviceViewController new], @"Device", @"iphone"),
             SCNav([SCAppsViewController new], @"Apps", @"app.badge"),
-            SCNav([SCSpoofViewController new], @"Spoof", @"gearshape")
+            SCNav([SCSpoofViewController new], @"Spoof", @"gearshape"),
+            SCNav([SCKernelViewController new], @"Kernel", @"cpu")
         ];
     }
     return self;

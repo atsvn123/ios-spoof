@@ -11,12 +11,14 @@ iOSSpoof_FILES = \
 	ObjC/SCAppDelegate.m \
 	ObjC/SCTabBarController.m \
 	ObjC/Models/SCAppConfig.m \
+	ObjC/Models/SCKernelCapabilityManager.m \
 	ObjC/Models/SCDevicePresetStore.m \
 	ObjC/Models/SCLocaleStore.m \
 	ObjC/Controllers/SCBaseTableViewController.m \
 	ObjC/Controllers/SCStatusViewController.m \
 	ObjC/Controllers/SCDeviceViewController.m \
 	ObjC/Controllers/SCAppsViewController.m \
+	ObjC/Controllers/SCKernelViewController.m \
 	ObjC/Controllers/SCSpoofViewController.m
 
 iOSSpoof_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-arc-performSelector-leaks

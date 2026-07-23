@@ -84,7 +84,7 @@ jobs:
             echo "Control archive:"
             (cd /tmp/iosspoof-deb && for f in control.tar.*; do [ -f "$f" ] && tar -tf "$f" | grep -E 'postinst|postrm|control' || true; done)
             echo "Data archive:"
-            (cd /tmp/iosspoof-deb && for f in data.tar.*; do [ -f "$f" ] && tar -tf "$f" | grep -E 'iOSSpoof\.app|iOSSpoof\.app/iOSSpoof$|Info\.plist' || true; done)
+            (cd /tmp/iosspoof-deb && for f in data.tar.*; do [ -f "$f" ] && tar -tf "$f" | grep -E 'iOSSpoof\.app|iOSSpoof\.app/iOSSpoof$|Info\.plist|sckrwprobe' || true; done)
             mkdir -p /tmp/iosspoof-deb/root
             (cd /tmp/iosspoof-deb/root && for f in ../data.tar.*; do [ -f "$f" ] && tar -xf "$f" || true; done)
             find /tmp/iosspoof-deb -maxdepth 8 -path '*iOSSpoof.app*' -print || true

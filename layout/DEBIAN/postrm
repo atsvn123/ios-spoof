@@ -1,16 +1,19 @@
 #!/bin/sh
 
-# Remove all iOSSpoof config files
+# Remove LaunchDaemon on removal
 DAEMON_PLIST="/Library/LaunchDaemons/com.iosspoof.scproxyd.plist"
 if [ -f "$DAEMON_PLIST" ]; then
     launchctl bootout system "$DAEMON_PLIST" >/dev/null 2>&1 || true
 fi
 
-rm -f /var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist 2>/dev/null
-rm -f /var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist 2>/dev/null
-rm -f /var/mobile/Library/Preferences/com.iosspoof.tweak.plist 2>/dev/null
-rm -f /var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist 2>/dev/null
-rm -f /var/root/Library/Logs/iOSSpoof/sckrwprobe.json 2>/dev/null
-rmdir /var/root/Library/Logs/iOSSpoof 2>/dev/null || true
+# Only purge persistent state on full removal, not upgrades
+if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
+    rm -f /var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.plist 2>/dev/null
+    rm -f /var/jb/var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist 2>/dev/null
+    rm -f /var/mobile/Library/Preferences/com.iosspoof.tweak.plist 2>/dev/null
+    rm -f /var/mobile/Library/Preferences/com.iosspoof.tweak.ids.plist 2>/dev/null
+    rm -f /var/root/Library/Logs/iOSSpoof/sckrwprobe.json 2>/dev/null
+    rmdir /var/root/Library/Logs/iOSSpoof 2>/dev/null || true
+fi
 
 exit 0

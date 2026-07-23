@@ -92,9 +92,13 @@ ios-spoof/
 
 ### Read-only KRW diagnostic
 
-The package includes `sckrwprobe`, an optional read-only diagnostic tool. It dynamically loads `libkrw` when available, records exported capabilities, calls only `kbase` and `kread`, validates the in-memory kernel Mach-O header, and extracts `LC_UUID`.
+The package includes `sckrwprobe`, an optional read-only diagnostic tool. It dynamically loads `libkrw` from validated root-owned absolute paths only, records exported capabilities, calls only `kbase` and `kread`, validates the in-memory kernel Mach-O header, and extracts `LC_UUID`.
 
-It does not call `kwrite`, `kcall`, `kmalloc`, `physwrite`, or modify kernel state. It does not run automatically and `libkrw` is not a mandatory package dependency.
+The helper invokes only `kbase` and `kread`. It does not call `kwrite`, `kcall`, `kmalloc`, `kdealloc`, `physread`, or `physwrite`. The safety report explicitly declares all six as `false`. Loading a libkrw provider may execute its static initializers; the report cannot prove the provider's internal implementation is mutation-free.
+
+The report includes a `bootTimeSeconds` field from `kern.boottime`. Cached reports from a previous boot are rejected.
+
+Library validation rejects basename `dlopen`, symlinks, non-root-owned files, and files writable by group or others.
 
 Run it as root on a test device:
 
@@ -115,6 +119,48 @@ Exit codes:
 - `2`: the report was written, but libkrw or the read-only kernel probe was unavailable or unverified.
 - `64`: invalid command-line argument.
 - `77`: the tool was not run as root.
+
+### Phase 1A kernel integration
+
+iOSSpoof exposes kernel capability state through `SCKernelCapabilityManager`. The app launches only the fixed `sckrwprobe` binary, installed root-owned and setuid-root, with one of two fixed arguments:
+
+- `--cached`: validate and return the existing root-owned JSON report without loading libkrw.
+- `--stdout`: run the read-only probe and return the new report.
+
+The app exposes these states through `SCKernelCapabilityManager`:
+
+- `isKernelRWAvailable`: libkrw is present and read-only kernel identity validation succeeded.
+- `isKernelReadAvailable`: `kbase` and `kread` verified a valid kernel Mach-O and UUID.
+- `isKernelWriteExported`: the provider exports `kwrite`; it is not called or verified.
+- `isKernelCallExported`: the provider exports `kcall`; it is not called or verified.
+- `isKernelMutationAvailable`: always `NO` during Phase 1A.
+
+The manager validates helper ownership (root, setuid, not group/other writable) before spawning, passes a minimal environment without `DYLD_*` variables, uses `CLOCK_MONOTONIC` for timeout, and validates `schemaVersion`, `mode`, boot identity, and every safety field (including `kmallocCalled`, `kdeallocCalled`, `physreadCalled`, `physwriteCalled`) before exposing capability state. Reports are only published when the helper exits with code `0` or `2`; stale or invalid reports are cleared.
+
+The **Kernel** tab can refresh the current report or trigger a read-only probe. The app does not accept arbitrary paths, arguments, addresses, kernel memory operations, or mutation commands.
+
+### Phase 1B primitive self-test
+
+When the provider exports `kmalloc`, `kwrite`, and `kdealloc`, the `--selftest` argument performs a controlled write/rollback cycle on an engine-owned kernel allocation:
+
+1. `kmalloc` a 64-byte test region.
+2. `kread` the original contents.
+3. `kwrite` a deterministic test pattern.
+4. `kread` back and verify the pattern matches.
+5. `kwrite` the original contents back.
+6. `kread` and verify the original is restored.
+7. `kdealloc` the test region.
+
+The self-test does not write to vnodes, process structures, mount tables, kernel text, or any live kernel data. If rollback verification fails, the transaction state is set to `quarantined` and no further writes are attempted.
+
+The report includes a `transactionState` field:
+
+- `readOnly`: self-test was not run or provider lacks required exports.
+- `selfTestVerified`: the full write/read/restore/dealloc cycle succeeded.
+- `selfTestFailed`: a step failed before rollback.
+- `quarantined`: rollback could not be verified; no further writes should be attempted this boot.
+
+`isPrimitiveSelfTestVerified` in `SCKernelCapabilityManager` reflects whether the last report contains `transactionState == selfTestVerified`.
 
 ### Requirements
 - macOS with Xcode 15+

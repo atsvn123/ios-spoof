@@ -22,4 +22,12 @@ if [ -f "$DAEMON_PLIST" ]; then
     launchctl kickstart -k "$DAEMON_LABEL" >/dev/null 2>&1 || true
 fi
 
+# Set root ownership and setuid on sckrwprobe at all known paths
+for probe in /var/jb/usr/bin/sckrwprobe /usr/bin/sckrwprobe; do
+    if [ -f "$probe" ]; then
+        chown root:wheel "$probe" 2>/dev/null || true
+        chmod 4755 "$probe" 2>/dev/null || true
+    fi
+done
+
 exit 0

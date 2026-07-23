@@ -741,11 +741,11 @@ static BOOL SCKernelPtrValid(uint64_t addr) {
 }
 
 // Find current_proc() function address in kernel __TEXT segment.
-// On arm64, current_proc() is a small function that reads TPIDR_EL1 and
-// follows pointers: cpu_data -> cpu_running_thread -> task -> bsd_info.
-// We scan __TEXT for the function signature pattern.
+// On arm64, current_proc() reads TPIDR_EL1 and follows pointers.
+// We scan for the mrs instruction pattern and count matches for diagnostics.
 static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase,
-                                       uint64_t *textAddr, uint64_t *textSize) {
+                                       uint64_t *textAddr, uint64_t *textSize,
+                                       int *mrsCount, int *patternMatched) {
     struct mach_header_64 header = {0};
     if (kread(kernelBase, &header, sizeof(header)) != 0) return 0;
     if (header.magic != MH_MAGIC_64 || header.ncmds == 0 || header.ncmds > SCMaxLoadCommands) return 0;
@@ -757,7 +757,10 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
         return 0;
     }
 
+    // Find __TEXT segment
     uint64_t textVmaddr = 0, textVmsize = 0;
+    // Also find __TEXT_EXEC segment (iOS kernel may put executable code here)
+    uint64_t textExecVmaddr = 0, textExecVmsize = 0;
     const uint8_t *ptr = commands;
     NSUInteger remaining = header.sizeofcmds;
     for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
@@ -768,67 +771,84 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
             if (strcmp(seg->segname, "__TEXT") == 0) {
                 textVmaddr = seg->vmaddr;
                 textVmsize = seg->vmsize;
-                break;
+            } else if (strcmp(seg->segname, "__TEXT_EXEC") == 0) {
+                textExecVmaddr = seg->vmaddr;
+                textExecVmsize = seg->vmsize;
             }
         }
         ptr += cmd->cmdsize;
         remaining -= cmd->cmdsize;
     }
     free(commands);
-    if (textVmaddr == 0) return 0;
+    if (textVmaddr == 0 && textExecVmaddr == 0) return 0;
 
     int64_t slide = (int64_t)(kernelBase - textVmaddr);
-    uint64_t textBase = textVmaddr + slide;
-    if (textAddr) *textAddr = textBase;
-    if (textSize) *textSize = textVmsize;
 
-    // Scan __TEXT for current_proc() pattern.
-    // arm64 current_proc typically starts with:
-    //   mrs xN, TPIDR_EL1      (0xd538d080 | Rt)
-    //   ldr xN, [xN, #imm]     (0xf940xxxx, any registers)
-    //   ldr xN, [xN, #imm]     (0xf940xxxx, any registers)
-    //   ldr xN, [xN, #imm]     (0xf940xxxx, any registers)
-    //   ret                     (0xd65f03c0)
-    //
-    // We scan for: mrs xN, TPIDR_EL1 followed by ldr chain and ret within 48 bytes.
-    // mrs xN, TPIDR_EL1 = 0xd538d080 | (Rt), mask 0xFFFFFFE0 = 0xD538D080
-    // ldr xN, [xM, #imm] = 0xf9400000 | (imm12<<10) | (Rn<<5) | Rt, mask 0xFFC00000 = 0xF9400000
-    // ret = 0xd65f03c0
+    // Scan both __TEXT and __TEXT_EXEC segments
+    struct { uint64_t base; uint64_t size; const char *name; } segs[2];
+    int segCount = 0;
+    if (textVmsize > 0) {
+        segs[segCount].base = textVmaddr + slide;
+        segs[segCount].size = textVmsize;
+        segs[segCount].name = "__TEXT";
+        segCount++;
+    }
+    if (textExecVmsize > 0) {
+        // __TEXT_EXEC may have its own vmaddr, compute slide relative to __TEXT
+        segs[segCount].base = textExecVmaddr + slide;
+        segs[segCount].size = textExecVmsize;
+        segs[segCount].name = "__TEXT_EXEC";
+        segCount++;
+    }
+
+    if (mrsCount) *mrsCount = 0;
+    if (patternMatched) *patternMatched = 0;
+
     const size_t scanChunk = 8192;
     uint8_t *chunk = malloc(scanChunk);
     if (!chunk) return 0;
 
-    uint64_t scanEnd = textVmsize;
-    if (scanEnd > 16 * 1024 * 1024) scanEnd = 16 * 1024 * 1024;
+    for (int si = 0; si < segCount; si++) {
+        uint64_t scanBase = segs[si].base;
+        uint64_t scanEnd = segs[si].size;
+        if (scanEnd > 32 * 1024 * 1024) scanEnd = 32 * 1024 * 1024;
 
-    for (uint64_t off = 0; off < scanEnd; off += scanChunk - 48) {
-        size_t readSize = scanChunk;
-        if (off + readSize > scanEnd) readSize = (size_t)(scanEnd - off);
-        if (readSize < 48) break;
+        for (uint64_t off = 0; off < scanEnd; off += scanChunk - 64) {
+            size_t readSize = scanChunk;
+            if (off + readSize > scanEnd) readSize = (size_t)(scanEnd - off);
+            if (readSize < 64) break;
 
-        if (kread(textBase + off, chunk, readSize) != 0) continue;
+            if (kread(scanBase + off, chunk, readSize) != 0) continue;
 
-        for (size_t i = 0; i + 48 <= readSize; i += 4) {
-            uint32_t insn = *(uint32_t *)(chunk + i);
-            // mrs xN, TPIDR_EL1: mask 0xFFFFFFE0, value 0xD538D080
-            if ((insn & 0xFFFFFFE0) != 0xD538D080) continue;
+            for (size_t i = 0; i + 64 <= readSize; i += 4) {
+                uint32_t insn = *(uint32_t *)(chunk + i);
 
-            // Look for ret within next 44 bytes (11 instructions)
-            // Allow ldr, mov, b instructions between mrs and ret
-            BOOL hasRet = NO;
-            int ldrCount = 0;
-            for (size_t j = 4; j <= 44; j += 4) {
-                uint32_t next = *(uint32_t *)(chunk + i + j);
-                if (next == 0xd65f03c0) { hasRet = YES; break; }
-                // ldr xN, [xM, #imm]
-                if ((next & 0xFFC00000) == 0xF9400000) { ldrCount++; continue; }
-                // Allow other instructions (mov, etc.)
+                // Check for mrs xN, TPIDR_EL1 (0xD538D080 | Rt, mask 0xFFFFFFE0)
+                // Also check TPIDR_EL0 (0xD538D040 | Rt) and TPIDRRO_EL0 (0xD538C040 | Rt)
+                BOOL isTPIDR_EL1 = (insn & 0xFFFFFFE0) == 0xD538D080;
+                BOOL isTPIDR_EL0 = (insn & 0xFFFFFFE0) == 0xD538D040;
+                BOOL isTPIDRRO_EL0 = (insn & 0xFFFFFFE0) == 0xD538C040;
+                if (!isTPIDR_EL1 && !isTPIDR_EL0 && !isTPIDRRO_EL0) continue;
+                if (mrsCount) (*mrsCount)++;
+
+                // Look for ret within next 60 bytes (15 instructions)
+                // Allow ldr, mov, b, bl, stp, ldp instructions
+                BOOL hasRet = NO;
+                int ldrCount = 0;
+                for (size_t j = 4; j <= 60; j += 4) {
+                    uint32_t next = *(uint32_t *)(chunk + i + j);
+                    if (next == 0xd65f03c0) { hasRet = YES; break; }
+                    if ((next & 0xFFC00000) == 0xF9400000) ldrCount++; // ldr xN, [xM, #imm]
+                }
+                if (!hasRet) continue;
+                if (ldrCount < 2) continue;
+                if (patternMatched) (*patternMatched)++;
+
+                free(chunk);
+                if (textAddr) *textAddr = scanBase;
+                if (textSize) *textSize = segs[si].size;
+                return scanBase + off + i;
             }
-            if (!hasRet) continue;
-            if (ldrCount < 2) continue;
-
-            free(chunk);
-            return textBase + off + i;
         }
     }
 
@@ -1289,8 +1309,15 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     uint64_t procAddr = 0;
     if (kcallFunction) {
         uint64_t textAddr = 0, textSize = 0;
-        uint64_t currentProcFunc = SCFindCurrentProcFunc(kreadFunction, kernelBase, &textAddr, &textSize);
+        int mrsCount = 0, patternMatched = 0;
+        uint64_t currentProcFunc = SCFindCurrentProcFunc(kreadFunction, kernelBase, &textAddr, &textSize, &mrsCount, &patternMatched);
         result[@"currentProcFuncAddr"] = currentProcFunc ? SCHexAddress(currentProcFunc) : @"0x0";
+        result[@"mrsCount"] = @(mrsCount);
+        result[@"patternMatched"] = @(patternMatched);
+        if (textSize > 0) {
+            result[@"textSegmentSize"] = @(textSize);
+            result[@"textSegmentAddr"] = SCHexAddress(textAddr);
+        }
         if (currentProcFunc) {
             uint64_t callResult = kcallFunction(currentProcFunc, 0, 0, 0, 0, 0, 0, 0);
             result[@"kcallCurrentProc"] = SCHexAddress(callResult);

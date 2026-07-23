@@ -940,11 +940,12 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     if (lePrev1 != allprocAddr) continue;
                     if (leNext1 == 0 || !SCKernelPtrValid(leNext1)) continue;
 
-                    // Validate: second proc's le_prev must point to first proc
+                    // Validate: second proc's le_prev must point to first proc's le_next field
+                    // le_prev is struct proc** — it points to &previous->le_next, not to the proc itself
                     if (kread(leNext1, secondBuf, procBufSize) != 0) continue;
                     uint64_t leNext2 = *(uint64_t *)(secondBuf + leOff);
                     uint64_t lePrev2 = *(uint64_t *)(secondBuf + leOff + 8);
-                    if (lePrev2 != firstProc) continue;
+                    if (lePrev2 != firstProc + leOff) continue;
                     if (leNext2 != 0 && !SCKernelPtrValid(leNext2)) continue;
                     lePrevMatched++;
 
@@ -954,7 +955,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     if (kread(thirdProc, thirdBuf, procBufSize) != 0) continue;
                     uint64_t leNext3 = *(uint64_t *)(thirdBuf + leOff);
                     uint64_t lePrev3 = *(uint64_t *)(thirdBuf + leOff + 8);
-                    if (lePrev3 != leNext1) continue;
+                    if (lePrev3 != leNext1 + leOff) continue;
                     if (leNext3 != 0 && !SCKernelPtrValid(leNext3)) continue;
 
                     // Pre-validate: find a pidOff where all 3 procs have valid PIDs.

@@ -189,12 +189,12 @@ This profile is marked `L4` and `mutationAllowed = false`. It only authorizes re
 The `--vfstest` argument creates a test file owned by the probe, finds its vnode through the proc/fd chain, toggles `VISSHADOW`, validates via `access()`, then restores original `v_flags`.
 
 The vnode is found by:
-1. Parsing kernel Mach-O `LC_SEGMENT_64` to locate `__DATA,__common` and `__DATA,__bss` sections
-2. Scanning those sections for `allproc` (a linked list of all processes)
-3. Walking the proc list to find the current process by matching `p_pid`
+1. Parsing kernel Mach-O `LC_SEGMENT_64` to locate `__DATA` segment and sections
+2. Scanning `__DATA` for `allproc` using the `LIST_ENTRY(le_prev)` invariant: for the first proc in the list, `le_prev` (offset 8) points back to `allproc` itself
+3. Walking the proc list (following `le_next` at offset 0) to find the current process by matching `p_pid`
 4. Following the fd chain: `proc → filedesc → fd_ofiles[fd] → fileproc → fileglob → vnode`
 
-Offsets for `p_pid`, `p_list.le_next`, `p_fd`, `fd_ofiles`, `f_fglob`, `fg_data`, and `v_flag` are all found dynamically by scanning struct layouts at runtime (validating pointer chains and field values at each level). No hardcoded offsets — works across different XNU versions and SoC variants.
+All struct offsets (`p_pid`, `p_fd`, `fd_ofiles`, `f_fglob`, `fg_data`, `v_flag`) are discovered dynamically by scanning struct layouts at runtime. Only `le_next` (offset 0) and `le_prev` (offset 8) are hardcoded, as they are consistent across all XNU versions.
 
 Safety:
 - `vnodeMutationCalled` is set to `true` only after a successful `kwrite` to `v_flags`

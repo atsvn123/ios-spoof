@@ -757,7 +757,7 @@ static NSDictionary *SCRunVFSTest(SCKReadFunction kreadFunction, SCKWriteFunctio
     result[@"fixturePath"] = fixturePath;
 
     // Verify file is visible before hiding
-    int accessBefore = syscall(SYS_access, path, F_OK);
+    int accessBefore = access(path, F_OK);
     result[@"accessBeforeHide"] = @(accessBefore == 0);
     if (accessBefore != 0) {
         result[@"state"] = @"failed";
@@ -767,33 +767,10 @@ static NSDictionary *SCRunVFSTest(SCKReadFunction kreadFunction, SCKWriteFunctio
         return result;
     }
 
-    // Find vnode for fd via proc chain:
-    // current proc -> p_fd -> fd_ofiles[fd] -> fp -> f_fglob -> fg_data -> vnode
-    // We use known offsets for T8015/iOS 16.7.x profile.
-    // allproc is found by scanning kernel text for "shutdownwait" string reference.
-    // For Phase 2B test, we use a simpler approach: use current pid and scan allproc.
-
-    // Get current pid
-    pid_t mypid = getpid();
-
-    // Read kernel base to find allproc
-    // We need the kernel base from the report - but we don't have it here.
-    // Instead, we use a kread-based approach: read our own proc struct.
-    // On iOS, current_proc() can be found via current_task()->bsd_info.
-    // But without kcall, we cannot call current_proc().
-    // Alternative: find allproc by scanning kernel cstring section.
-
-    // For now, we use a different approach: the vnode can be found via
-    // the fileglob directly. We know fd -> fileproc -> fileglob -> vnode.
-    // But we need the proc struct address first.
-
-    // Since we don't have kcall, we cannot get current_proc() directly.
-    // We need to find allproc by scanning kernel text.
-    // This is the same approach as vnodebypass: scan for "shutdownwait" string,
-    // then find the xref that loads allproc.
-
+    // VFS vnode hiding requires finding the current proc's vnode chain:
+    // allproc -> proc -> p_fd -> fd_ofiles[fd] -> fp -> f_fglob -> fg_data -> vnode
+    // Without kcall or kernel symbol scanning, we cannot locate allproc.
     // For Phase 2B safety, we do NOT implement kernel text scanning yet.
-    // Instead, we report that VFS test requires kcall or allproc offset.
     result[@"state"] = @"unsupported";
     result[@"error"] = @"VFS test requires allproc offset or kcall to find current proc; not available in this provider";
     result[@"vnodeAddress"] = @"0x0";

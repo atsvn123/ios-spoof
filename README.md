@@ -184,6 +184,12 @@ The current registry contains a single qualified profile for:
 
 This profile is marked `L4` and `mutationAllowed = false`. It only authorizes read-only probing and the controlled kmalloc/kwrite/kdealloc self-test. No vnode or VFS backend is enabled yet.
 
+### Phase 2B VFS test fixture
+
+The `--vfstest` argument creates a test file owned by the probe, attempts to find its vnode through the proc/fd chain, toggles `VISSHADOW`, validates via direct `syscall(SYS_access)`, then restores original `v_flags`. If the provider lacks `kcall` or allproc offset discovery is not yet implemented, the VFS test reports `unsupported` without modifying any kernel data.
+
+The VFS test does not hide `/var/jb`, bootstrap artifacts, or any path not created by the probe itself.
+
 ### Requirements
 - macOS with Xcode 15+
 - [Theos](https://theos.dev) installed at `$THEOS`

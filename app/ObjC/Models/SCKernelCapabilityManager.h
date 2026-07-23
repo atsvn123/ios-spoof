@@ -31,6 +31,7 @@ typedef void (^SCKernelCapabilityCompletion)(BOOL success, NSError * _Nullable e
 - (void)refreshStatusWithCompletion:(nullable SCKernelCapabilityCompletion)completion;
 - (void)runReadOnlyProbeWithCompletion:(nullable SCKernelCapabilityCompletion)completion;
 - (void)runPrimitiveSelfTestWithCompletion:(nullable SCKernelCapabilityCompletion)completion;
+- (void)runVFSTestWithCompletion:(nullable SCKernelCapabilityCompletion)completion;
 
 @end
 

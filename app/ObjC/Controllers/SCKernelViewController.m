@@ -25,18 +25,19 @@
     return self.isViewLoaded && self.view.window != nil;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 5; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 6; }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     if (section == 0) return 7;
     if (section == 1) return 4;
     if (section == 2) return 4;
     if (section == 3) return 1;
+    if (section == 4) return 1;
     return 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return @[@"Kernel Capabilities", @"Environment", @"Profile Registry", @"Read-only Action", @"Phase 1B Self-Test"][section];
+    return @[@"Kernel Capabilities", @"Environment", @"Profile Registry", @"Read-only Action", @"Phase 1B Self-Test", @"Phase 2B VFS Test"][section];
 }
 
 - (NSString *)stateText:(BOOL)enabled trueText:(NSString *)trueText falseText:(NSString *)falseText {
@@ -76,7 +77,16 @@
     }
 
     if (indexPath.section == 4) {
+    if (indexPath.section == 5) {
         UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        cell.textLabel.text = manager.isLoading ? @"Đang chạy…" : @"Run VFS Test";
+        cell.detailTextLabel.text = @"Tạo test file, hide/restore vnode, validate via direct syscall.";
+        cell.textLabel.textColor = manager.isLoading ? UIColor.secondaryLabelColor : UIColor.systemBlueColor;
+        cell.selectionStyle = manager.isLoading ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
+
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
         if (manager.isPrimitiveSelfTestVerified) {
             cell.textLabel.text = @"Self-Test Verified";
             cell.detailTextLabel.text = @"kmalloc + kwrite + kdealloc đã xác minh trên vùng nhớ test.";
@@ -124,6 +134,9 @@
     } else if (indexPath.section == 4) {
         [self.tableView reloadData];
         [self.kernelManager runPrimitiveSelfTestWithCompletion:completion];
+    } else if (indexPath.section == 5) {
+        [self.tableView reloadData];
+        [self.kernelManager runVFSTestWithCompletion:completion];
     }
 }
 

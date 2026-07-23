@@ -115,12 +115,19 @@ static BOOL SCIsBooleanFalse(id value) {
     BOOL selfTestAttempted = [transactionState isEqualToString:@"selfTestVerified"] ||
         [transactionState isEqualToString:@"selfTestFailed"] ||
         [transactionState isEqualToString:@"quarantined"];
+    BOOL vfsTestAttempted = [transactionState isEqualToString:@"vfsTestAttempted"] ||
+        [transactionState isEqualToString:@"vfsTestVerified"] ||
+        [transactionState isEqualToString:@"vfsTestFailed"];
 
-    NSArray<NSString *> *selfTestKeys = @[@"kwriteCalled", @"kmallocCalled", @"kdeallocCalled"];
-    for (NSString *key in selfTestKeys) {
-        if (![safety[key] isKindOfClass:NSNumber.class]) return NO;
-        if (!selfTestAttempted && [safety[key] boolValue]) return NO;
+    NSArray<NSString *> *alwaysFalseKeys = @[
+        @"kcallCalled", @"physreadCalled", @"physwriteCalled", @"kernelMutationAllowed", @"artifactHidingEnabled"
+    ];
+    for (NSString *key in alwaysFalseKeys) {
+        if (!SCIsBooleanFalse(safety[key])) return NO;
     }
+
+    if (![safety[@"vnodeMutationCalled"] isKindOfClass:NSNumber.class]) return NO;
+    if (!vfsTestAttempted && [safety[@"vnodeMutationCalled"] boolValue]) return NO;
 
     NSDictionary *environment = report[@"environment"];
     if (![environment isKindOfClass:NSDictionary.class]) return NO;
@@ -257,6 +264,10 @@ static BOOL SCIsBooleanFalse(id value) {
 
 - (void)runPrimitiveSelfTestWithCompletion:(SCKernelCapabilityCompletion)completion {
     [self runProbeArgument:@"--selftest" statusMessage:@"Đang chạy primitive self-test…" completion:completion];
+}
+
+- (void)runVFSTestWithCompletion:(SCKernelCapabilityCompletion)completion {
+    [self runProbeArgument:@"--vfstest" statusMessage:@"Đang chạy VFS test…" completion:completion];
 }
 
 - (void)runProbeArgument:(NSString *)argument statusMessage:(NSString *)statusMessage completion:(SCKernelCapabilityCompletion)completion {

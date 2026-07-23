@@ -24,11 +24,9 @@
 #define VISSHADOW 0x008000
 #endif
 
-// XNU 8792 (iOS 16.7.x) arm64 offsets
-// p_pid and v_flag are hardcoded; all other offsets are found dynamically
-// by scanning struct layouts at runtime.
-#define SC_VNODE_V_FLAGS_OFF_T8015_167  0x54
-#define SC_PROC_PID_OFF_T8015_167       0x60
+// All struct offsets (p_pid, p_list.le_next, v_flag, p_fd, fd_ofiles,
+// f_fglob, fg_data) are discovered dynamically by scanning kernel memory
+// layouts at runtime. No hardcoded offsets.
 
 typedef int (*SCKBaseFunction)(uint64_t *address);
 typedef int (*SCKReadFunction)(uint64_t address, void *buffer, size_t length);
@@ -424,6 +422,7 @@ static BOOL SCValidateReportContract(NSDictionary *report) {
     BOOL vfsTestAttempted = [transactionState isEqualToString:@"vfsTestAttempted"] ||
         [transactionState isEqualToString:@"vfsTestVerified"] ||
         [transactionState isEqualToString:@"vfsTestFailed"] ||
+        [transactionState isEqualToString:@"vfsTestQuarantined"] ||
         [transactionState isEqualToString:@"vfsTestUnsupported"];
 
     NSArray<NSString *> *alwaysFalseKeys = @[
@@ -824,9 +823,31 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                    SCKernelDataSections *sections,
                                    pid_t targetPid,
                                    NSMutableDictionary *diagnostics) {
+    // Dynamically discover p_pid and p_list.le_next offsets by scanning
+    // kernel __DATA,__common and __DATA,__bss for the allproc list head.
+    //
+    // allproc is a LIST_HEAD(prohead, proc) whose lh_first field is a kernel
+    // pointer to the first proc struct. We scan every 8-byte aligned value,
+    // treat it as a candidate allproc.lh_first, then validate by checking
+    // that the proc struct has a valid linked list (le_next at some offset)
+    // and valid PIDs (p_pid at some offset) across multiple procs.
+    //
+    // Once we find consistent (le_next_offset, p_pid_offset) across two procs,
+    // we walk the entire list looking for our PID.
+
+    const size_t procBufSize = 512;
     const size_t chunkSize = 4096;
+    const size_t maxLeOff = 128;   // le_next is within first 128 bytes of proc
+    const size_t maxPidOff = 256;  // p_pid is within first 256 bytes of proc
+
     uint8_t *chunk = malloc(chunkSize);
-    if (!chunk) return 0;
+    uint8_t *buf1 = malloc(procBufSize);
+    uint8_t *buf2 = malloc(procBufSize);
+    uint8_t *walkBuf = malloc(procBufSize);
+    if (!chunk || !buf1 || !buf2 || !walkBuf) {
+        free(chunk); free(buf1); free(buf2); free(walkBuf);
+        return 0;
+    }
 
     struct { uint64_t addr; uint64_t size; const char *name; } scans[] = {
         { sections->commonAddr, sections->commonSize, "__common" },
@@ -850,42 +871,63 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                 uint64_t candidate = *(uint64_t *)(chunk + i);
                 if (!SCKernelPtrValid(candidate)) continue;
 
-                uint32_t pid = 0;
-                if (kread(candidate + SC_PROC_PID_OFF_T8015_167, &pid, 4) != 0) continue;
-                if (pid > 65535) continue;
+                // Read first proc struct
+                if (kread(candidate, buf1, procBufSize) != 0) continue;
 
-                uint64_t leNext = 0;
-                if (kread(candidate, &leNext, 8) != 0) continue;
-                if (leNext != 0 && !SCKernelPtrValid(leNext)) continue;
+                // Scan for le_next offset: a kernel pointer at 8-byte alignment
+                for (size_t leOff = 0; leOff + 8 <= maxLeOff && leOff + 8 <= procBufSize; leOff += 8) {
+                    uint64_t leNext1 = *(uint64_t *)(buf1 + leOff);
+                    if (leNext1 == 0 || !SCKernelPtrValid(leNext1)) continue;
 
-                if (leNext != 0) {
-                    uint32_t nextPid = 0;
-                    if (kread(leNext + SC_PROC_PID_OFF_T8015_167, &nextPid, 4) != 0) continue;
-                    if (nextPid > 65535) continue;
-                }
+                    // Read second proc struct
+                    if (kread(leNext1, buf2, procBufSize) != 0) continue;
 
-                uint64_t procAddr = candidate;
-                int walkCount = 0;
-                while (procAddr != 0 && walkCount < 8192) {
-                    if (kread(procAddr + SC_PROC_PID_OFF_T8015_167, &pid, 4) != 0) break;
-                    if (pid == (uint32_t)targetPid) {
-                        free(chunk);
-                        diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                        diagnostics[@"allprocOffset"] = @(offset + i);
-                        diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                        return procAddr;
+                    // Verify le_next at same offset in second proc
+                    uint64_t leNext2 = *(uint64_t *)(buf2 + leOff);
+                    if (leNext2 != 0 && !SCKernelPtrValid(leNext2)) continue;
+
+                    // Find p_pid offset: 4-byte aligned, both procs have valid PIDs
+                    for (size_t pidOff = 4; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
+                        // Skip if pidOff overlaps with le_next pointer
+                        if (pidOff + 4 > leOff && pidOff < leOff + 8) continue;
+
+                        uint32_t pid1 = *(uint32_t *)(buf1 + pidOff);
+                        uint32_t pid2 = *(uint32_t *)(buf2 + pidOff);
+                        if (pid1 == 0 || pid1 > 65535) continue;
+                        if (pid2 == 0 || pid2 > 65535) continue;
+
+                        // Found consistent (leOff, pidOff). Walk the list.
+                        uint64_t procAddr = candidate;
+                        int walkCount = 0;
+                        while (procAddr != 0 && walkCount < 8192) {
+                            if (kread(procAddr, walkBuf, procBufSize) != 0) break;
+                            uint32_t pid = *(uint32_t *)(walkBuf + pidOff);
+                            if (pid == (uint32_t)targetPid) {
+                                free(chunk); free(buf1); free(buf2); free(walkBuf);
+                                diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                                diagnostics[@"allprocOffset"] = @(offset + i);
+                                diagnostics[@"procLeNextOffset"] = @(leOff);
+                                diagnostics[@"procPidOffset"] = @(pidOff);
+                                diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                return procAddr;
+                            }
+                            procAddr = *(uint64_t *)(walkBuf + leOff);
+                            if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
+                            walkCount++;
+                        }
                     }
-                    if (kread(procAddr, &procAddr, 8) != 0) break;
-                    if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
-                    walkCount++;
                 }
             }
         }
     }
 
-    free(chunk);
+    free(chunk); free(buf1); free(buf2); free(walkBuf);
     return 0;
 }
+
+// SCFollowFdChain walks: proc -> filedesc -> fd_ofiles[fd] -> fileproc ->
+// fileglob -> vnode. All struct offsets are discovered dynamically.
+// Returns vnode address, or 0 on failure. Also sets diagnostics["vflagOffset"].
 
 static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd,
                                  NSMutableDictionary *diagnostics) {
@@ -896,6 +938,9 @@ static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd
         return 0;
     }
 
+    // Scan proc struct for filedesc pointer: a kernel pointer that points to
+    // a struct containing another kernel pointer (ofiles) at some offset,
+    // where ofiles[fd] is also a valid kernel pointer (fileproc).
     uint64_t fdesc = 0;
     uint64_t ofiles = 0;
     uint64_t fileproc = 0;
@@ -906,10 +951,10 @@ static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd
         uint64_t candidate = *(uint64_t *)(procData + fdOff);
         if (!SCKernelPtrValid(candidate)) continue;
 
-        uint8_t fdescData[64];
-        if (kread(candidate, fdescData, 64) != 0) continue;
+        uint8_t fdescData[128];
+        if (kread(candidate, fdescData, 128) != 0) continue;
 
-        for (ofilesOff = 0; ofilesOff + 8 <= 64; ofilesOff += 8) {
+        for (ofilesOff = 0; ofilesOff + 8 <= 128; ofilesOff += 8) {
             uint64_t ofilesCandidate = *(uint64_t *)(fdescData + ofilesOff);
             if (!SCKernelPtrValid(ofilesCandidate)) continue;
 
@@ -936,41 +981,70 @@ static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd
     diagnostics[@"ofilesAddress"] = SCHexAddress(ofiles);
     diagnostics[@"fileprocAddress"] = SCHexAddress(fileproc);
 
-    uint8_t fpData[64];
-    if (kread(fileproc, fpData, 64) != 0) {
+    // Scan fileproc struct for fileglob pointer: a kernel pointer that points
+    // to a struct containing another kernel pointer (vnode) at some offset,
+    // where the vnode has a reasonable v_flags value.
+    uint8_t fpData[128];
+    if (kread(fileproc, fpData, 128) != 0) {
         diagnostics[@"fdChainError"] = @"could not read fileproc struct";
         return 0;
     }
 
     uint64_t fileglob = 0;
+    uint64_t vnodeAddr = 0;
     size_t fgOff = 0;
-    for (fgOff = 0; fgOff + 8 <= 64; fgOff += 8) {
-        uint64_t candidate = *(uint64_t *)(fpData + fgOff);
-        if (!SCKernelPtrValid(candidate)) continue;
+    size_t dataOff = 0;
+    size_t vflagOff = 0;
 
-        uint8_t fgData[128];
-        if (kread(candidate, fgData, 128) != 0) continue;
+    for (fgOff = 0; fgOff + 8 <= 128 && vnodeAddr == 0; fgOff += 8) {
+        uint64_t fgCandidate = *(uint64_t *)(fpData + fgOff);
+        if (!SCKernelPtrValid(fgCandidate)) continue;
 
-        for (size_t dataOff = 0; dataOff + 8 <= 128; dataOff += 8) {
+        uint8_t fgData[256];
+        if (kread(fgCandidate, fgData, 256) != 0) continue;
+
+        for (dataOff = 0; dataOff + 8 <= 256 && vnodeAddr == 0; dataOff += 8) {
             uint64_t vnodeCandidate = *(uint64_t *)(fgData + dataOff);
             if (!SCKernelPtrValid(vnodeCandidate)) continue;
 
-            uint32_t flags = 0;
-            if (kread(vnodeCandidate + SC_VNODE_V_FLAGS_OFF_T8015_167, &flags, 4) != 0) continue;
-            if (flags == 0 || flags == 0xFFFFFFFF || flags > 0xFFFFF) continue;
-            if (flags & VISSHADOW) continue;
+            // Read vnode struct and scan for v_flags: a 4-byte value that is
+            // non-zero, < 0xFFFFF, and does not have VISSHADOW set.
+            uint8_t vnodeData[256];
+            if (kread(vnodeCandidate, vnodeData, 256) != 0) continue;
 
-            fileglob = candidate;
-            diagnostics[@"fileprocFgOffset"] = @(fgOff);
-            diagnostics[@"fileglobAddress"] = SCHexAddress(fileglob);
-            diagnostics[@"fileglobDataOffset"] = @(dataOff);
-            diagnostics[@"vnodeAddress"] = SCHexAddress(vnodeCandidate);
-            return vnodeCandidate;
+            for (size_t voff = 4; voff + 4 <= 256; voff += 4) {
+                uint32_t flags = *(uint32_t *)(vnodeData + voff);
+                if (flags == 0 || flags == 0xFFFFFFFF || flags > 0xFFFFF) continue;
+                if (flags & VISSHADOW) continue;
+                // Heuristic: v_type (int32, 1-8 for VREG..VBAD) should appear
+                // somewhere in the 16 bytes before v_flag. v_type, v_tag,
+                // v_lflag, v_id may all be between v_type and v_flag.
+                BOOL hasVtype = NO;
+                for (size_t toff = voff >= 20 ? voff - 20 : 0; toff + 4 <= voff; toff += 4) {
+                    int32_t maybeType = (int32_t)*(uint32_t *)(vnodeData + toff);
+                    if (maybeType >= 1 && maybeType <= 8) { hasVtype = YES; break; }
+                }
+                if (!hasVtype) continue;
+
+                fileglob = fgCandidate;
+                vnodeAddr = vnodeCandidate;
+                vflagOff = voff;
+                break;
+            }
         }
     }
 
-    diagnostics[@"fdChainError"] = @"could not find vnode via fileproc -> fileglob chain";
-    return 0;
+    if (vnodeAddr == 0) {
+        diagnostics[@"fdChainError"] = @"could not find vnode via fileproc -> fileglob chain";
+        return 0;
+    }
+
+    diagnostics[@"fileprocFgOffset"] = @(fgOff);
+    diagnostics[@"fileglobAddress"] = SCHexAddress(fileglob);
+    diagnostics[@"fileglobDataOffset"] = @(dataOff);
+    diagnostics[@"vnodeAddress"] = SCHexAddress(vnodeAddr);
+    diagnostics[@"vflagOffset"] = @(vflagOff);
+    return vnodeAddr;
 }
 
 static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
@@ -1053,8 +1127,11 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
         return result;
     }
 
+    size_t vflagOff = [result[@"vflagOffset"] unsignedIntegerValue];
+    result[@"vnodeAddress"] = SCHexAddress(vnodeAddr);
+
     uint32_t originalFlags = 0;
-    if (kreadFunction(vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, &originalFlags, 4) != 0) {
+    if (kreadFunction(vnodeAddr + vflagOff, &originalFlags, 4) != 0) {
         result[@"state"] = @"failed";
         result[@"error"] = @"could not read vnode v_flags";
         close(fd);
@@ -1073,7 +1150,7 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
 
     uint32_t newFlags = originalFlags ^ VISSHADOW;
     result[@"vnodeMutationCalled"] = @YES;
-    int writeStatus = kwriteFunction(&newFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+    int writeStatus = kwriteFunction(&newFlags, vnodeAddr + vflagOff, 4);
     result[@"vflagsWriteStatus"] = SCStatusString(writeStatus);
     if (writeStatus != 0) {
         result[@"state"] = @"failed";
@@ -1084,10 +1161,10 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     }
 
     uint32_t afterWriteFlags = 0;
-    if (kreadFunction(vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, &afterWriteFlags, 4) != 0) {
+    if (kreadFunction(vnodeAddr + vflagOff, &afterWriteFlags, 4) != 0) {
         result[@"state"] = @"quarantined";
         result[@"error"] = @"kread failed to verify v_flags after write; attempting restore";
-        kwriteFunction(&originalFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+        kwriteFunction(&originalFlags, vnodeAddr + vflagOff, 4);
         close(fd);
         unlink(path);
         return result;
@@ -1096,7 +1173,7 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     if (afterWriteFlags != newFlags) {
         result[@"state"] = @"quarantined";
         result[@"error"] = @"v_flags write did not produce expected value; restoring";
-        kwriteFunction(&originalFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+        kwriteFunction(&originalFlags, vnodeAddr + vflagOff, 4);
         close(fd);
         unlink(path);
         return result;
@@ -1107,7 +1184,7 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     result[@"accessAfterHide"] = @(accessAfterHide == 0);
     result[@"syscallVerified"] = @(accessAfterHide != 0);
 
-    int restoreStatus = kwriteFunction(&originalFlags, vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, 4);
+    int restoreStatus = kwriteFunction(&originalFlags, vnodeAddr + vflagOff, 4);
     result[@"vflagsRestoreStatus"] = SCStatusString(restoreStatus);
     if (restoreStatus != 0) {
         result[@"state"] = @"quarantined";
@@ -1118,7 +1195,7 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     }
 
     uint32_t verifyFlags = 0;
-    if (kreadFunction(vnodeAddr + SC_VNODE_V_FLAGS_OFF_T8015_167, &verifyFlags, 4) != 0) {
+    if (kreadFunction(vnodeAddr + vflagOff, &verifyFlags, 4) != 0) {
         result[@"state"] = @"quarantined";
         result[@"error"] = @"kread failed to verify v_flags restoration";
         close(fd);
@@ -1250,7 +1327,7 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
             } else if ([vfsState isEqualToString:@"failed"]) {
                 report[@"transactionState"] = @"vfsTestFailed";
             } else if ([vfsState isEqualToString:@"quarantined"]) {
-                report[@"transactionState"] = @"quarantined";
+                report[@"transactionState"] = @"vfsTestQuarantined";
             } else if ([vfsState isEqualToString:@"unsupported"]) {
                 report[@"transactionState"] = @"vfsTestUnsupported";
             } else {

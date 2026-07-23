@@ -162,6 +162,28 @@ The report includes a `transactionState` field:
 
 `isPrimitiveSelfTestVerified` in `SCKernelCapabilityManager` reflects whether the last report contains `transactionState == selfTestVerified`.
 
+### Phase 2A profile registry
+
+Phase 2A adds an exact kernel profile registry keyed by:
+
+- `productType`
+- `hardwareModel`
+- `osBuild`
+- `darwinRelease`
+- `kernelUUID`
+- `providerFamily`
+
+The current registry contains a single qualified profile for:
+
+- `iPhone10,3`
+- `D22AP`
+- `20H364`
+- `22.6.0`
+- `28E24CE2-BA1C-38B1-AC56-C0BE08A077BC`
+- `libkrw-dopamine`
+
+This profile is marked `L4` and `mutationAllowed = false`. It only authorizes read-only probing and the controlled kmalloc/kwrite/kdealloc self-test. No vnode or VFS backend is enabled yet.
+
 ### Requirements
 - macOS with Xcode 15+
 - [Theos](https://theos.dev) installed at `$THEOS`

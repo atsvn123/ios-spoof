@@ -22,6 +22,10 @@ typedef void (^SCKernelCapabilityCompletion)(BOOL success, NSError * _Nullable e
 @property (nonatomic, copy, readonly) NSString *providerName;
 @property (nonatomic, copy, readonly) NSString *realDevice;
 @property (nonatomic, copy, readonly) NSString *realOSBuild;
+@property (nonatomic, readonly) BOOL isKernelProfileMatched;
+@property (nonatomic, copy, readonly) NSString *kernelProfileID;
+@property (nonatomic, copy, readonly) NSString *kernelProfileLevel;
+@property (nonatomic, copy, readonly) NSString *kernelProviderFamily;
 
 + (instancetype)shared;
 - (void)refreshStatusWithCompletion:(nullable SCKernelCapabilityCompletion)completion;

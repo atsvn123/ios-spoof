@@ -91,6 +91,11 @@ static BOOL SCIsBooleanFalse(id value) {
     return [value isKindOfClass:NSDictionary.class] ? value : @{};
 }
 
+- (NSDictionary *)profileReport {
+    id value = self.report[@"profileMatch"];
+    return [value isKindOfClass:NSDictionary.class] ? value : @{};
+}
+
 - (BOOL)reportSatisfiesReadOnlyContract:(NSDictionary *)report {
     if (![report isKindOfClass:NSDictionary.class]) return NO;
     if (![report[@"schemaVersion"] isKindOfClass:NSNumber.class]) return NO;
@@ -196,6 +201,25 @@ static BOOL SCIsBooleanFalse(id value) {
     NSDictionary *sysctl = [environment isKindOfClass:NSDictionary.class] ? environment[@"sysctl"] : nil;
     NSString *build = [sysctl isKindOfClass:NSDictionary.class] ? sysctl[@"osBuild"] : nil;
     return build.length ? build : @"";
+}
+
+- (BOOL)isKernelProfileMatched {
+    return [[self profileReport][@"matched"] boolValue];
+}
+
+- (NSString *)kernelProfileID {
+    NSString *value = [self profileReport][@"profileID"];
+    return [value isKindOfClass:NSString.class] ? value : @"";
+}
+
+- (NSString *)kernelProfileLevel {
+    NSString *value = [self profileReport][@"profileLevel"];
+    return [value isKindOfClass:NSString.class] ? value : @"";
+}
+
+- (NSString *)kernelProviderFamily {
+    NSString *value = [self profileReport][@"providerFamily"];
+    return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
 - (NSString *)probeExecutablePath {

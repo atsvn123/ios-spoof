@@ -482,6 +482,90 @@ static NSString *SCSHA256Hash(const void *data, size_t length) {
     return [NSString stringWithFormat:@"fnv1a64:%016llx", (unsigned long long)hash];
 }
 
+static NSArray<NSDictionary *> *SCKernelProfiles(void) {
+    return @[
+        @{
+            @"profileID": @"iphone10-3-d22ap-20h364-28e24ce2",
+            @"profileVersion": @1,
+            @"productType": @"iPhone10,3",
+            @"hardwareModel": @"D22AP",
+            @"soc": @"T8015",
+            @"osBuild": @"20H364",
+            @"darwinRelease": @"22.6.0",
+            @"kernelUUID": @"28E24CE2-BA1C-38B1-AC56-C0BE08A077BC",
+            @"providerFamily": @"libkrw-dopamine",
+            @"minimumCapabilityLevel": @"L4",
+            @"vfsBackend": @NO,
+            @"namecacheBackend": @NO,
+            @"mutationAllowed": @NO,
+            @"notes": @"Initial read/primitive-self-test profile for iPhone X D22AP build 20H364. No VFS mutation enabled."
+        }
+    ];
+}
+
+static NSString *SCDetectedProviderFamily(NSArray<NSString *> *loadedImages, NSString *loadedPath) {
+    for (NSString *path in loadedImages.reverseObjectEnumerator) {
+        if (![path isKindOfClass:NSString.class]) continue;
+        NSString *name = path.lastPathComponent.lowercaseString;
+        if ([name containsString:@"libkrw-dopamine"]) return @"libkrw-dopamine";
+        if ([name containsString:@"palera1n"]) return @"libkrw-palera1n";
+        if ([name containsString:@"checkra1n"]) return @"libkrw-checkra1n";
+    }
+    if ([loadedPath.lowercaseString containsString:@"libkrw"]) return @"libkrw";
+    return @"unknown";
+}
+
+static NSDictionary *SCProfileMatchForReport(NSDictionary *report) {
+    NSDictionary *environment = report[@"environment"];
+    NSDictionary *sysctl = [environment isKindOfClass:NSDictionary.class] ? environment[@"sysctl"] : nil;
+    NSDictionary *krw = report[@"krw"];
+    NSDictionary *kernelProbe = [krw isKindOfClass:NSDictionary.class] ? krw[@"kernelProbe"] : nil;
+
+    NSString *productType = [sysctl[@"productType"] isKindOfClass:NSString.class] ? sysctl[@"productType"] : @"";
+    NSString *hardwareModel = [sysctl[@"hardwareModel"] isKindOfClass:NSString.class] ? sysctl[@"hardwareModel"] : @"";
+    NSString *osBuild = [sysctl[@"osBuild"] isKindOfClass:NSString.class] ? sysctl[@"osBuild"] : @"";
+    NSString *darwinRelease = [sysctl[@"osRelease"] isKindOfClass:NSString.class] ? sysctl[@"osRelease"] : @"";
+    NSString *kernelUUID = [kernelProbe[@"kernelUUID"] isKindOfClass:NSString.class] ? kernelProbe[@"kernelUUID"] : @"";
+    NSArray *loadedImages = [krw[@"loadedImages"] isKindOfClass:NSArray.class] ? krw[@"loadedImages"] : @[];
+    NSString *loadedPath = [krw[@"loadedPath"] isKindOfClass:NSString.class] ? krw[@"loadedPath"] : @"";
+    NSString *providerFamily = SCDetectedProviderFamily(loadedImages, loadedPath);
+
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"matched"] = @NO;
+    result[@"mutationAllowed"] = @NO;
+    result[@"profileLevel"] = @"L0";
+    result[@"providerFamily"] = providerFamily;
+    result[@"required"] = @{
+        @"productType": productType,
+        @"hardwareModel": hardwareModel,
+        @"osBuild": osBuild,
+        @"darwinRelease": darwinRelease,
+        @"kernelUUID": kernelUUID,
+        @"providerFamily": providerFamily
+    };
+
+    for (NSDictionary *profile in SCKernelProfiles()) {
+        BOOL match = [profile[@"productType"] isEqualToString:productType] &&
+            [profile[@"hardwareModel"] isEqualToString:hardwareModel] &&
+            [profile[@"osBuild"] isEqualToString:osBuild] &&
+            [profile[@"darwinRelease"] isEqualToString:darwinRelease] &&
+            [profile[@"kernelUUID"] isEqualToString:kernelUUID] &&
+            [profile[@"providerFamily"] isEqualToString:providerFamily];
+        if (!match) continue;
+
+        result[@"matched"] = @YES;
+        result[@"profileID"] = profile[@"profileID"];
+        result[@"profileVersion"] = profile[@"profileVersion"];
+        result[@"profileLevel"] = profile[@"minimumCapabilityLevel"] ?: @"L0";
+        result[@"vfsBackend"] = profile[@"vfsBackend"] ?: @NO;
+        result[@"namecacheBackend"] = profile[@"namecacheBackend"] ?: @NO;
+        result[@"mutationAllowed"] = profile[@"mutationAllowed"] ?: @NO;
+        result[@"notes"] = profile[@"notes"] ?: @"";
+        break;
+    }
+    return result;
+}
+
 static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadFunction) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"state"] = @"probing";
@@ -652,6 +736,7 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest) {
         krw[@"loadedImages"] = @[];
         krw[@"kernelProbe"] = @{ @"error": @"libkrw could not be loaded" };
         report[@"krw"] = krw;
+        report[@"profileMatch"] = SCProfileMatchForReport(report);
         return report;
     }
 
@@ -699,6 +784,7 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest) {
     }
     krw[@"loadedImages"] = SCLoadedKRWImages();
     report[@"krw"] = krw;
+    report[@"profileMatch"] = SCProfileMatchForReport(report);
     dlclose(handle);
     return report;
 }

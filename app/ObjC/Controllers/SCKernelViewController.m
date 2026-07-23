@@ -25,17 +25,18 @@
     return self.isViewLoaded && self.view.window != nil;
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 5; }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     if (section == 0) return 7;
     if (section == 1) return 4;
-    if (section == 2) return 1;
+    if (section == 2) return 4;
+    if (section == 3) return 1;
     return 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return @[@"Kernel Capabilities", @"Environment", @"Read-only Action", @"Phase 1B Self-Test"][section];
+    return @[@"Kernel Capabilities", @"Environment", @"Profile Registry", @"Read-only Action", @"Phase 1B Self-Test"][section];
 }
 
 - (NSString *)stateText:(BOOL)enabled trueText:(NSString *)trueText falseText:(NSString *)falseText {
@@ -65,7 +66,16 @@
         }
     }
 
-    if (indexPath.section == 3) {
+    if (indexPath.section == 2) {
+        switch (indexPath.row) {
+            case 0: return [self cellWithTitle:@"Profile Match" detail:[self stateText:manager.isKernelProfileMatched trueText:@"Matched" falseText:@"Unmatched"]];
+            case 1: return [self cellWithTitle:@"Profile ID" detail:manager.kernelProfileID.length ? manager.kernelProfileID : @"-"];
+            case 2: return [self cellWithTitle:@"Profile Level" detail:manager.kernelProfileLevel.length ? manager.kernelProfileLevel : @"-"];
+            default: return [self cellWithTitle:@"Provider Family" detail:manager.kernelProviderFamily.length ? manager.kernelProviderFamily : @"-"];
+        }
+    }
+
+    if (indexPath.section == 4) {
         UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
         if (manager.isPrimitiveSelfTestVerified) {
             cell.textLabel.text = @"Self-Test Verified";
@@ -108,10 +118,10 @@
         }
     };
 
-    if (indexPath.section == 2) {
+    if (indexPath.section == 3) {
         [self.tableView reloadData];
         [self.kernelManager runReadOnlyProbeWithCompletion:completion];
-    } else if (indexPath.section == 3) {
+    } else if (indexPath.section == 4) {
         [self.tableView reloadData];
         [self.kernelManager runPrimitiveSelfTestWithCompletion:completion];
     }

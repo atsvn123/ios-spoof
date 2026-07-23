@@ -745,6 +745,12 @@ typedef struct {
     uint64_t commonSize;
     uint64_t bssAddr;
     uint64_t bssSize;
+    uint64_t dataAddr;
+    uint64_t dataSize;
+    uint64_t segmentAddr;
+    uint64_t segmentSize;
+    uint64_t dataConstAddr;
+    uint64_t dataConstSize;
 } SCKernelDataSections;
 
 static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
@@ -794,20 +800,31 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
         if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
         if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
             const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
-            if (strcmp(seg->segname, "__DATA") == 0 && seg->nsects > 0) {
-                const struct section_64 *sect = (const struct section_64 *)(ptr + sizeof(struct segment_command_64));
-                size_t sectionArraySize = (size_t)seg->nsects * sizeof(struct section_64);
-                if (sectionArraySize <= cmd->cmdsize - sizeof(struct segment_command_64)) {
-                    for (uint32_t j = 0; j < seg->nsects; j++) {
-                        if (strcmp(sect[j].sectname, "__common") == 0) {
-                            out->commonAddr = sect[j].addr + slide;
-                            out->commonSize = sect[j].size;
-                        } else if (strcmp(sect[j].sectname, "__bss") == 0) {
-                            out->bssAddr = sect[j].addr + slide;
-                            out->bssSize = sect[j].size;
+
+            if (strcmp(seg->segname, "__DATA") == 0) {
+                out->segmentAddr = seg->vmaddr + slide;
+                out->segmentSize = seg->vmsize;
+                if (seg->nsects > 0) {
+                    const struct section_64 *sect = (const struct section_64 *)(ptr + sizeof(struct segment_command_64));
+                    size_t sectionArraySize = (size_t)seg->nsects * sizeof(struct section_64);
+                    if (sectionArraySize <= cmd->cmdsize - sizeof(struct segment_command_64)) {
+                        for (uint32_t j = 0; j < seg->nsects; j++) {
+                            if (strcmp(sect[j].sectname, "__common") == 0) {
+                                out->commonAddr = sect[j].addr + slide;
+                                out->commonSize = sect[j].size;
+                            } else if (strcmp(sect[j].sectname, "__bss") == 0) {
+                                out->bssAddr = sect[j].addr + slide;
+                                out->bssSize = sect[j].size;
+                            } else if (strcmp(sect[j].sectname, "__data") == 0) {
+                                out->dataAddr = sect[j].addr + slide;
+                                out->dataSize = sect[j].size;
+                            }
                         }
                     }
                 }
+            } else if (strcmp(seg->segname, "__DATA_CONST") == 0) {
+                out->dataConstAddr = seg->vmaddr + slide;
+                out->dataConstSize = seg->vmsize;
             }
         }
         ptr += cmd->cmdsize;
@@ -815,7 +832,7 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
     }
 
     free(commands);
-    out->valid = (out->commonSize > 0 || out->bssSize > 0);
+    out->valid = (out->segmentSize > 0 || out->commonSize > 0 || out->bssSize > 0 || out->dataSize > 0);
     return out->valid;
 }
 
@@ -824,7 +841,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                    pid_t targetPid,
                                    NSMutableDictionary *diagnostics) {
     // Dynamically discover p_pid and p_list.le_next offsets by scanning
-    // kernel __DATA,__common and __DATA,__bss for the allproc list head.
+    // kernel __DATA segment for the allproc list head.
     //
     // allproc is a LIST_HEAD(prohead, proc) whose lh_first field is a kernel
     // pointer to the first proc struct. We scan every 8-byte aligned value,
@@ -836,9 +853,9 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
     // we walk the entire list looking for our PID.
 
     const size_t procBufSize = 512;
-    const size_t chunkSize = 4096;
-    const size_t maxLeOff = 128;   // le_next is within first 128 bytes of proc
-    const size_t maxPidOff = 256;  // p_pid is within first 256 bytes of proc
+    const size_t chunkSize = 8192;
+    const size_t maxLeOff = 128;
+    const size_t maxPidOff = 256;
 
     uint8_t *chunk = malloc(chunkSize);
     uint8_t *buf1 = malloc(procBufSize);
@@ -849,16 +866,46 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
         return 0;
     }
 
-    struct { uint64_t addr; uint64_t size; const char *name; } scans[] = {
-        { sections->commonAddr, sections->commonSize, "__common" },
-        { sections->bssAddr, sections->bssSize, "__bss" }
-    };
+    // Scan all __DATA sections plus the full segment range as fallback.
+    // allproc may be in __common, __bss, __data, or elsewhere in __DATA.
+    struct { uint64_t addr; uint64_t size; const char *name; } scans[5];
+    int scanCount = 0;
+    if (sections->commonSize > 0) {
+        scans[scanCount].addr = sections->commonAddr;
+        scans[scanCount].size = sections->commonSize;
+        scans[scanCount].name = "__common";
+        scanCount++;
+    }
+    if (sections->bssSize > 0) {
+        scans[scanCount].addr = sections->bssAddr;
+        scans[scanCount].size = sections->bssSize;
+        scans[scanCount].name = "__bss";
+        scanCount++;
+    }
+    if (sections->dataSize > 0) {
+        scans[scanCount].addr = sections->dataAddr;
+        scans[scanCount].size = sections->dataSize;
+        scans[scanCount].name = "__data";
+        scanCount++;
+    }
+    // Full __DATA segment as fallback (covers any section we missed)
+    if (sections->segmentSize > 0) {
+        scans[scanCount].addr = sections->segmentAddr;
+        scans[scanCount].size = sections->segmentSize;
+        scans[scanCount].name = "__DATA";
+        scanCount++;
+    }
 
-    for (int si = 0; si < 2; si++) {
+    int totalCandidates = 0;
+    int validFirstProc = 0;
+    int validLeNext = 0;
+    int validPidPair = 0;
+
+    for (int si = 0; si < scanCount; si++) {
         uint64_t scanAddr = scans[si].addr;
         uint64_t scanSize = scans[si].size;
         if (scanAddr == 0 || scanSize == 0) continue;
-        if (scanSize > 2 * 1024 * 1024) scanSize = 2 * 1024 * 1024;
+        if (scanSize > 8 * 1024 * 1024) scanSize = 8 * 1024 * 1024;
 
         for (uint64_t offset = 0; offset < scanSize; offset += chunkSize - 8) {
             size_t readSize = chunkSize;
@@ -870,9 +917,11 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
             for (size_t i = 0; i + 8 <= readSize; i += 8) {
                 uint64_t candidate = *(uint64_t *)(chunk + i);
                 if (!SCKernelPtrValid(candidate)) continue;
+                totalCandidates++;
 
                 // Read first proc struct
                 if (kread(candidate, buf1, procBufSize) != 0) continue;
+                validFirstProc++;
 
                 // Scan for le_next offset: a kernel pointer at 8-byte alignment
                 for (size_t leOff = 0; leOff + 8 <= maxLeOff && leOff + 8 <= procBufSize; leOff += 8) {
@@ -881,6 +930,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
 
                     // Read second proc struct
                     if (kread(leNext1, buf2, procBufSize) != 0) continue;
+                    validLeNext++;
 
                     // Verify le_next at same offset in second proc
                     uint64_t leNext2 = *(uint64_t *)(buf2 + leOff);
@@ -895,6 +945,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                         uint32_t pid2 = *(uint32_t *)(buf2 + pidOff);
                         if (pid1 == 0 || pid1 > 65535) continue;
                         if (pid2 == 0 || pid2 > 65535) continue;
+                        validPidPair++;
 
                         // Found consistent (leOff, pidOff). Walk the list.
                         uint64_t procAddr = candidate;
@@ -909,6 +960,10 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                 diagnostics[@"procLeNextOffset"] = @(leOff);
                                 diagnostics[@"procPidOffset"] = @(pidOff);
                                 diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                diagnostics[@"scanCandidates"] = @(totalCandidates);
+                                diagnostics[@"scanValidFirstProc"] = @(validFirstProc);
+                                diagnostics[@"scanValidLeNext"] = @(validLeNext);
+                                diagnostics[@"scanValidPidPair"] = @(validPidPair);
                                 return procAddr;
                             }
                             procAddr = *(uint64_t *)(walkBuf + leOff);
@@ -922,6 +977,10 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
     }
 
     free(chunk); free(buf1); free(buf2); free(walkBuf);
+    diagnostics[@"scanCandidates"] = @(totalCandidates);
+    diagnostics[@"scanValidFirstProc"] = @(validFirstProc);
+    diagnostics[@"scanValidLeNext"] = @(validLeNext);
+    diagnostics[@"scanValidPidPair"] = @(validPidPair);
     return 0;
 }
 
@@ -1077,6 +1136,12 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     result[@"commonSectionSize"] = @(sections.commonSize);
     result[@"bssSectionAddr"] = SCHexAddress(sections.bssAddr);
     result[@"bssSectionSize"] = @(sections.bssSize);
+    result[@"dataSectionAddr"] = SCHexAddress(sections.dataAddr);
+    result[@"dataSectionSize"] = @(sections.dataSize);
+    result[@"dataSegmentAddr"] = SCHexAddress(sections.segmentAddr);
+    result[@"dataSegmentSize"] = @(sections.segmentSize);
+    result[@"dataConstSegmentAddr"] = SCHexAddress(sections.dataConstAddr);
+    result[@"dataConstSegmentSize"] = @(sections.dataConstSize);
 
     NSString *fixturePath = @"/var/root/Library/Logs/iOSSpoof/vfs_test_fixture";
     NSString *fixtureDir = [fixturePath stringByDeletingLastPathComponent];

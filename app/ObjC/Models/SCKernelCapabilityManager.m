@@ -2,8 +2,10 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -37,23 +39,21 @@ static char **SCFilteredEnvironment(void) {
     return filtered;
 }
 
-static BOOL SCIsHelperSafe(NSString *path) {
-    if (!path.length || ![path hasPrefix:@"/"]) return NO;
+static NSString *SCResolvedSafeHelperPath(NSString *path) {
+    if (!path.length || ![path hasPrefix:@"/"]) return nil;
+    char resolvedPath[PATH_MAX];
+    if (!realpath(path.fileSystemRepresentation, resolvedPath)) return nil;
     struct stat info = {0};
-    if (lstat(path.fileSystemRepresentation, &info) != 0) return NO;
-    if (!S_ISREG(info.st_mode) || S_ISLNK(info.st_mode)) return NO;
-    if (info.st_uid != 0) return NO;
-    if (info.st_mode & (S_IWGRP | S_IWOTH)) return NO;
-    if (!(info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) return NO;
-    return YES;
+    if (stat(resolvedPath, &info) != 0) return nil;
+    if (!S_ISREG(info.st_mode)) return nil;
+    if (info.st_uid != 0) return nil;
+    if (info.st_mode & (S_IWGRP | S_IWOTH)) return nil;
+    if (!(info.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) return nil;
+    return [NSString stringWithUTF8String:resolvedPath];
 }
 
 static BOOL SCIsBooleanFalse(id value) {
-    if (![value isKindOfClass:NSNumber.class]) return NO;
-    NSNumber *number = (NSNumber *)value;
-    if (number == @(NO) || number == @(0)) return YES;
-    if (number == @(YES) || number == @(1)) return NO;
-    return NO;
+    return [value isKindOfClass:NSNumber.class] && ![(NSNumber *)value boolValue];
 }
 
 @interface SCKernelCapabilityManager ()
@@ -94,17 +94,27 @@ static BOOL SCIsBooleanFalse(id value) {
 - (BOOL)reportSatisfiesReadOnlyContract:(NSDictionary *)report {
     if (![report isKindOfClass:NSDictionary.class]) return NO;
     if (![report[@"schemaVersion"] isKindOfClass:NSNumber.class]) return NO;
-    if ([report[@"schemaVersion"] integerValue] != 1) return NO;
+    if ([report[@"schemaVersion"] integerValue] != 2) return NO;
     if (![report[@"mode"] isEqualToString:@"read-only"]) return NO;
 
     NSDictionary *safety = report[@"safety"];
     if (![safety isKindOfClass:NSDictionary.class]) return NO;
-    NSArray<NSString *> *requiredSafetyKeys = @[
-        @"kwriteCalled", @"kcallCalled", @"kmallocCalled", @"kdeallocCalled",
-        @"physreadCalled", @"physwriteCalled", @"kernelMutationAllowed", @"artifactHidingEnabled"
+    NSArray<NSString *> *alwaysFalseKeys = @[
+        @"kcallCalled", @"physreadCalled", @"physwriteCalled", @"kernelMutationAllowed", @"artifactHidingEnabled"
     ];
-    for (NSString *key in requiredSafetyKeys) {
+    for (NSString *key in alwaysFalseKeys) {
         if (!SCIsBooleanFalse(safety[key])) return NO;
+    }
+
+    NSString *transactionState = report[@"transactionState"];
+    BOOL selfTestAttempted = [transactionState isEqualToString:@"selfTestVerified"] ||
+        [transactionState isEqualToString:@"selfTestFailed"] ||
+        [transactionState isEqualToString:@"quarantined"];
+
+    NSArray<NSString *> *selfTestKeys = @[@"kwriteCalled", @"kmallocCalled", @"kdeallocCalled"];
+    for (NSString *key in selfTestKeys) {
+        if (![safety[key] isKindOfClass:NSNumber.class]) return NO;
+        if (!selfTestAttempted && [safety[key] boolValue]) return NO;
     }
 
     NSDictionary *environment = report[@"environment"];
@@ -116,6 +126,7 @@ static BOOL SCIsBooleanFalse(id value) {
     if (![krw isKindOfClass:NSDictionary.class]) return NO;
     if (![krw[@"libraryPresent"] isKindOfClass:NSNumber.class]) return NO;
     if (![krw[@"kernelProbe"] isKindOfClass:NSDictionary.class]) return NO;
+    if (selfTestAttempted && ![krw[@"primitiveSelfTest"] isKindOfClass:NSDictionary.class]) return NO;
     return YES;
 }
 
@@ -145,7 +156,8 @@ static BOOL SCIsBooleanFalse(id value) {
     if (![self reportSatisfiesReadOnlyContract:self.report]) return NO;
     NSDictionary *selfTest = [self krwReport][@"primitiveSelfTest"];
     if (![selfTest isKindOfClass:NSDictionary.class]) return NO;
-    return [[selfTest[@"state"] isKindOfClass:NSString.class] ? selfTest[@"state"] : @"" isEqualToString:@"verified"];
+    NSString *state = [selfTest[@"state"] isKindOfClass:NSString.class] ? selfTest[@"state"] : @"";
+    return [state isEqualToString:@"verified"];
 }
 
 - (NSString *)transactionState {
@@ -188,6 +200,11 @@ static BOOL SCIsBooleanFalse(id value) {
 
 - (NSString *)probeExecutablePath {
     NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    char *jbroot = getenv("JBROOT");
+    if (jbroot && jbroot[0]) {
+        NSString *root = [NSString stringWithUTF8String:jbroot];
+        [candidates addObject:[root stringByAppendingString:@"/usr/bin/sckrwprobe"]];
+    }
     NSString *appExecutable = NSBundle.mainBundle.executablePath;
     NSString *suffix = @"/Applications/iOSSpoof.app/iOSSpoof";
     if ([appExecutable hasSuffix:suffix]) {
@@ -200,7 +217,8 @@ static BOOL SCIsBooleanFalse(id value) {
     ]];
 
     for (NSString *candidate in candidates) {
-        if (SCIsHelperSafe(candidate)) return candidate;
+        NSString *resolvedCandidate = SCResolvedSafeHelperPath(candidate);
+        if (resolvedCandidate.length) return resolvedCandidate;
     }
     return nil;
 }
@@ -230,7 +248,7 @@ static BOOL SCIsBooleanFalse(id value) {
 
     NSString *executable = [self probeExecutablePath];
     if (!executable.length) {
-        NSError *error = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: @"Không tìm thấy sckrwprobe hợp lệ (setuid root)"}];
+        NSError *error = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:2 userInfo:@{NSLocalizedDescriptionKey: @"Không tìm thấy sckrwprobe hợp lệ"}];
         self.statusMessage = error.localizedDescription;
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, error); });
         return;
@@ -241,8 +259,6 @@ static BOOL SCIsBooleanFalse(id value) {
 
     NSString *capturedExecutable = executable;
     NSString *capturedArgument = argument;
-    __block BOOL localLoading = YES;
-
     dispatch_async(self.workQueue, ^{
         NSError *resultError = nil;
         NSDictionary *parsedReport = nil;
@@ -259,64 +275,71 @@ static BOOL SCIsBooleanFalse(id value) {
                 resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:actionsInitStatus userInfo:@{NSLocalizedDescriptionKey: @"posix_spawn_file_actions_init failed"}];
                 close(outputFD);
             } else {
-                posix_spawn_file_actions_adddup2(&actions, outputFD, STDOUT_FILENO);
-                posix_spawn_file_actions_addclose(&actions, outputFD);
-
-                const char *path = capturedExecutable.fileSystemRepresentation;
-                char *argv[] = { (char *)path, (char *)capturedArgument.UTF8String, NULL };
-                pid_t child = 0;
-                int spawnStatus = posix_spawn(&child, path, &actions, NULL, argv, SCFilteredEnvironment());
-                posix_spawn_file_actions_destroy(&actions);
-                close(outputFD);
-
-                if (spawnStatus != 0) {
-                    resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:spawnStatus userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Không thể chạy sckrwprobe: %d", spawnStatus]}];
+                int dupStatus = posix_spawn_file_actions_adddup2(&actions, outputFD, STDOUT_FILENO);
+                int closeStatus = posix_spawn_file_actions_addclose(&actions, outputFD);
+                if (dupStatus != 0 || closeStatus != 0) {
+                    resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:(dupStatus ?: closeStatus) userInfo:@{NSLocalizedDescriptionKey: @"Không thể cấu hình stdout cho sckrwprobe"}];
+                    posix_spawn_file_actions_destroy(&actions);
+                    close(outputFD);
                 } else {
-                    struct timespec startTime;
-                    clock_gettime(CLOCK_MONOTONIC, &startTime);
-                    int waitStatus = 0;
-                    BOOL finished = NO;
-                    BOOL timedOut = NO;
+                    const char *path = capturedExecutable.fileSystemRepresentation;
+                    char *argv[] = { (char *)path, (char *)capturedArgument.UTF8String, NULL };
+                    pid_t child = 0;
+                    char **filteredEnvironment = SCFilteredEnvironment();
+                    int spawnStatus = posix_spawn(&child, path, &actions, NULL, argv, filteredEnvironment);
+                    if (filteredEnvironment) free(filteredEnvironment);
+                    posix_spawn_file_actions_destroy(&actions);
+                    close(outputFD);
 
-                    while (YES) {
-                        pid_t waitResult = waitpid(child, &waitStatus, WNOHANG);
-                        if (waitResult == child) {
-                            finished = YES;
-                            break;
-                        }
-                        if (waitResult < 0 && errno != EINTR) break;
+                    if (spawnStatus != 0) {
+                        resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:spawnStatus userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Không thể chạy sckrwprobe: %d", spawnStatus]}];
+                    } else {
+                        struct timespec startTime;
+                        clock_gettime(CLOCK_MONOTONIC, &startTime);
+                        int waitStatus = 0;
+                        BOOL finished = NO;
+                        BOOL timedOut = NO;
 
-                        struct timespec now;
-                        clock_gettime(CLOCK_MONOTONIC, &now);
-                        double elapsed = (now.tv_sec - startTime.tv_sec) + (now.tv_nsec - startTime.tv_nsec) / 1e9;
-                        if (elapsed >= SCProbeTimeout) {
-                            timedOut = YES;
-                            break;
-                        }
-                        usleep(100000);
-                    }
+                        while (YES) {
+                            pid_t waitResult = waitpid(child, &waitStatus, WNOHANG);
+                            if (waitResult == child) {
+                                finished = YES;
+                                break;
+                            }
+                            if (waitResult < 0 && errno != EINTR) break;
 
-                    if (timedOut && !finished) {
-                        kill(child, SIGTERM);
-                        BOOL reaped = NO;
-                        for (int attempt = 0; attempt < 25; attempt++) {
-                            if (waitpid(child, &waitStatus, WNOHANG) == child) { reaped = YES; break; }
-                            usleep(10000);
+                            struct timespec now;
+                            clock_gettime(CLOCK_MONOTONIC, &now);
+                            double elapsed = (now.tv_sec - startTime.tv_sec) + (now.tv_nsec - startTime.tv_nsec) / 1e9;
+                            if (elapsed >= SCProbeTimeout) {
+                                timedOut = YES;
+                                break;
+                            }
+                            usleep(100000);
                         }
-                        if (!reaped) {
-                            kill(child, SIGKILL);
-                            for (int attempt = 0; attempt < 50; attempt++) {
+
+                        if (timedOut && !finished) {
+                            kill(child, SIGTERM);
+                            BOOL reaped = NO;
+                            for (int attempt = 0; attempt < 25; attempt++) {
                                 if (waitpid(child, &waitStatus, WNOHANG) == child) { reaped = YES; break; }
                                 usleep(10000);
                             }
+                            if (!reaped) {
+                                kill(child, SIGKILL);
+                                for (int attempt = 0; attempt < 50; attempt++) {
+                                    if (waitpid(child, &waitStatus, WNOHANG) == child) { reaped = YES; break; }
+                                    usleep(10000);
+                                }
+                            }
+                            resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:4 userInfo:@{NSLocalizedDescriptionKey: @"Kernel probe quá thời gian 20 giây"}];
+                        } else if (finished && WIFEXITED(waitStatus)) {
+                            exitCode = WEXITSTATUS(waitStatus);
+                        } else if (finished && WIFSIGNALED(waitStatus)) {
+                            resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:5 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Kernel probe bị kill bởi signal %d", WTERMSIG(waitStatus)]}];
+                        } else {
+                            resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:6 userInfo:@{NSLocalizedDescriptionKey: @"Kernel probe kết thúc bất thường"}];
                         }
-                        resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:4 userInfo:@{NSLocalizedDescriptionKey: @"Kernel probe quá thời gian 20 giây"}];
-                    } else if (finished && WIFEXITED(waitStatus)) {
-                        exitCode = WEXITSTATUS(waitStatus);
-                    } else if (finished && WIFSIGNALED(waitStatus)) {
-                        resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:5 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Kernel probe bị kill bởi signal %d", WTERMSIG(waitStatus)]}];
-                    } else {
-                        resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:6 userInfo:@{NSLocalizedDescriptionKey: @"Kernel probe kết thúc bất thường"}];
                     }
                 }
             }
@@ -339,6 +362,8 @@ static BOOL SCIsBooleanFalse(id value) {
             resultError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:7 userInfo:@{NSLocalizedDescriptionKey: @"Kernel probe không trả về JSON hợp lệ"}];
         }
 
+        NSString *reportedTransactionState = [parsedReport[@"transactionState"] isKindOfClass:NSString.class] ? parsedReport[@"transactionState"] : @"";
+        BOOL selfTestProblem = [reportedTransactionState isEqualToString:@"selfTestFailed"] || [reportedTransactionState isEqualToString:@"quarantined"];
         BOOL acceptedExit = (exitCode == 0 || exitCode == 2);
         BOOL validContract = parsedReport && [self reportSatisfiesReadOnlyContract:parsedReport];
         BOOL shouldPublish = acceptedExit && validContract;
@@ -357,11 +382,16 @@ static BOOL SCIsBooleanFalse(id value) {
             if (!acceptedExit && !finalError) {
                 finalError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:exitCode userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Kernel probe trả về exit code %d", exitCode]}];
             }
+            if (shouldPublish && selfTestProblem && !finalError) {
+                NSString *description = [reportedTransactionState isEqualToString:@"quarantined"] ? @"Primitive self-test bị quarantine" : @"Primitive self-test thất bại";
+                finalError = [NSError errorWithDomain:SCKernelCapabilityErrorDomain code:9 userInfo:@{NSLocalizedDescriptionKey: description}];
+            }
 
             self.loading = NO;
-            localLoading = NO;
 
-            if (shouldPublish && self.isKernelReadAvailable) {
+            if (shouldPublish && selfTestProblem) {
+                self.statusMessage = finalError.localizedDescription ?: @"Primitive self-test thất bại";
+            } else if (shouldPublish && self.isKernelReadAvailable) {
                 self.statusMessage = @"Kernel read đã xác minh";
             } else if (shouldPublish) {
                 self.statusMessage = @"Provider chưa được xác minh";
@@ -369,7 +399,7 @@ static BOOL SCIsBooleanFalse(id value) {
                 self.statusMessage = finalError.localizedDescription ?: @"Không có trạng thái";
             }
 
-            BOOL requestSucceeded = shouldPublish;
+            BOOL requestSucceeded = shouldPublish && !selfTestProblem;
             if (completion) completion(requestSucceeded, finalError);
         });
     });

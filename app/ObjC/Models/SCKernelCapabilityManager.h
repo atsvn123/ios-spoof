@@ -18,6 +18,10 @@ typedef void (^SCKernelCapabilityCompletion)(BOOL success, NSError * _Nullable e
 @property (nonatomic, readonly) BOOL isKernelMutationAvailable;
 @property (nonatomic, readonly) BOOL isPrimitiveSelfTestVerified;
 @property (nonatomic, copy, readonly) NSString *transactionState;
+@property (nonatomic, copy, readonly) NSString *kernelUUID;
+@property (nonatomic, copy, readonly) NSString *providerName;
+@property (nonatomic, copy, readonly) NSString *realDevice;
+@property (nonatomic, copy, readonly) NSString *realOSBuild;
 
 + (instancetype)shared;
 - (void)refreshStatusWithCompletion:(nullable SCKernelCapabilityCompletion)completion;

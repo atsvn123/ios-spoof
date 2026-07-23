@@ -2,6 +2,7 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <limits.h>
 #include <mach/machine.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -116,18 +117,25 @@ static NSDictionary *SCRealEnvironment(void) {
 static NSString *SCJbrootPrefix(void) {
     char *jbroot = getenv("JBROOT");
     if (jbroot && jbroot[0]) return [NSString stringWithUTF8String:jbroot];
+    NSString *executable = NSProcessInfo.processInfo.arguments.firstObject;
+    NSString *suffix = @"/usr/bin/sckrwprobe";
+    if ([executable hasSuffix:suffix]) {
+        return [executable substringToIndex:executable.length - suffix.length];
+    }
     if ([NSFileManager.defaultManager fileExistsAtPath:@"/var/jb"]) return @"/var/jb";
     return @"";
 }
 
-static BOOL SCIsSafeLibraryPath(NSString *path) {
-    if (!path.length || ![path hasPrefix:@"/"]) return NO;
+static NSString *SCResolvedSafeLibraryPath(NSString *path) {
+    if (!path.length || ![path hasPrefix:@"/"]) return nil;
+    char resolvedPath[PATH_MAX];
+    if (!realpath(path.fileSystemRepresentation, resolvedPath)) return nil;
     struct stat info = {0};
-    if (lstat(path.fileSystemRepresentation, &info) != 0) return NO;
-    if (!S_ISREG(info.st_mode) || S_ISLNK(info.st_mode)) return NO;
-    if (info.st_uid != 0) return NO;
-    if (info.st_mode & (S_IWGRP | S_IWOTH)) return NO;
-    return YES;
+    if (stat(resolvedPath, &info) != 0) return nil;
+    if (!S_ISREG(info.st_mode)) return nil;
+    if (info.st_uid != 0) return nil;
+    if (info.st_mode & (S_IWGRP | S_IWOTH)) return nil;
+    return [NSString stringWithUTF8String:resolvedPath];
 }
 
 static NSArray<NSString *> *SCKRWLibraryCandidates(void) {
@@ -148,20 +156,22 @@ static void *SCOpenKRWLibrary(NSString **loadedPath, NSMutableArray<NSDictionary
     for (NSString *candidate in SCKRWLibraryCandidates()) {
         NSMutableDictionary *attempt = [NSMutableDictionary dictionary];
         attempt[@"path"] = candidate;
-        if (!SCIsSafeLibraryPath(candidate)) {
+        NSString *resolvedCandidate = SCResolvedSafeLibraryPath(candidate);
+        if (!resolvedCandidate.length) {
             attempt[@"opened"] = @NO;
             attempt[@"error"] = @"rejected: not a root-owned regular file or writable by group/others";
             [attempts addObject:attempt];
             continue;
         }
+        attempt[@"resolvedPath"] = resolvedCandidate;
         dlerror();
-        void *handle = dlopen(candidate.UTF8String, RTLD_NOW | RTLD_LOCAL);
+        void *handle = dlopen(resolvedCandidate.UTF8String, RTLD_NOW | RTLD_LOCAL);
         const char *error = dlerror();
         attempt[@"opened"] = @(handle != NULL);
         attempt[@"error"] = error ? [NSString stringWithUTF8String:error] : @"";
         [attempts addObject:attempt];
         if (handle) {
-            if (loadedPath) *loadedPath = candidate;
+            if (loadedPath) *loadedPath = resolvedCandidate;
             return handle;
         }
     }
@@ -376,24 +386,27 @@ static BOOL SCWriteReport(NSDictionary *report, NSString **errorDescription) {
 }
 
 static BOOL SCIsBooleanFalse(id value) {
-    if (![value isKindOfClass:NSNumber.class]) return NO;
-    NSNumber *number = (NSNumber *)value;
-    if (number == @(NO) || number == @(0)) return YES;
-    if (number == @(YES) || number == @(1)) return NO;
-    return NO;
+    return [value isKindOfClass:NSNumber.class] && ![(NSNumber *)value boolValue];
 }
 
 static BOOL SCValidateReportContract(NSDictionary *report) {
     if (![report isKindOfClass:NSDictionary.class]) return NO;
     if (![report[@"schemaVersion"] isKindOfClass:NSNumber.class]) return NO;
-    if ([report[@"schemaVersion"] integerValue] < 1 || [report[@"schemaVersion"] integerValue] > 2) return NO;
+    if ([report[@"schemaVersion"] integerValue] != 2) return NO;
     if (![report[@"mode"] isEqualToString:@"read-only"]) return NO;
 
     NSDictionary *safety = report[@"safety"];
     if (![safety isKindOfClass:NSDictionary.class]) return NO;
 
     NSString *transactionState = report[@"transactionState"];
-    BOOL selfTestVerified = [transactionState isEqualToString:@"selfTestVerified"];
+    BOOL selfTestAttempted = [transactionState isEqualToString:@"selfTestVerified"] ||
+        [transactionState isEqualToString:@"selfTestFailed"] ||
+        [transactionState isEqualToString:@"quarantined"];
+
+    NSDictionary *krw = report[@"krw"];
+    if (![krw isKindOfClass:NSDictionary.class]) return NO;
+    if (![krw[@"libraryPresent"] isKindOfClass:NSNumber.class]) return NO;
+    if (![krw[@"kernelProbe"] isKindOfClass:NSDictionary.class]) return NO;
 
     NSArray<NSString *> *alwaysFalseKeys = @[
         @"kcallCalled", @"physreadCalled", @"physwriteCalled",
@@ -403,16 +416,16 @@ static BOOL SCValidateReportContract(NSDictionary *report) {
         if (!SCIsBooleanFalse(safety[key])) return NO;
     }
 
-    NSArray<NSString *> *selfTestKeys = @[
-        @"kwriteCalled", @"kmallocCalled", @"kdeallocCalled"
-    ];
+    NSDictionary *selfTest = krw[@"primitiveSelfTest"];
+    if (selfTestAttempted && ![selfTest isKindOfClass:NSDictionary.class]) return NO;
+
+    NSArray<NSString *> *selfTestKeys = @[@"kwriteCalled", @"kmallocCalled", @"kdeallocCalled"];
     for (NSString *key in selfTestKeys) {
-        id value = safety[key];
-        if (![value isKindOfClass:NSNumber.class]) return NO;
-        if (selfTestVerified) {
-            if (![value boolValue]) return NO;
-        } else {
-            if ([value boolValue]) return NO;
+        if (![safety[key] isKindOfClass:NSNumber.class]) return NO;
+    }
+    if (!selfTestAttempted) {
+        for (NSString *key in selfTestKeys) {
+            if ([safety[key] boolValue]) return NO;
         }
     }
 
@@ -426,10 +439,6 @@ static BOOL SCValidateReportContract(NSDictionary *report) {
     if (sysctlbyname("kern.boottime", &currentBoottime, &boottimeSize, NULL, 0) != 0) return NO;
     if ([bootTime integerValue] != currentBoottime.tv_sec) return NO;
 
-    NSDictionary *krw = report[@"krw"];
-    if (![krw isKindOfClass:NSDictionary.class]) return NO;
-    if (![krw[@"libraryPresent"] isKindOfClass:NSNumber.class]) return NO;
-    if (![krw[@"kernelProbe"] isKindOfClass:NSDictionary.class]) return NO;
     return YES;
 }
 
@@ -462,17 +471,15 @@ static NSDictionary *SCReadCachedReport(NSString **errorDescription) {
     return json;
 }
 
-#include <CommonCrypto/CommonDigest.h>
-
 static NSString *SCSHA256Hash(const void *data, size_t length) {
     if (!data || length == 0) return @"";
-    uint8_t hash[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(data, (CC_LONG)length, hash);
-    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
-    for (size_t i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
-        [hex appendFormat:@"%02x", hash[i]];
+    const uint8_t *bytes = data;
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < length; i++) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
     }
-    return hex;
+    return [NSString stringWithFormat:@"fnv1a64:%016llx", (unsigned long long)hash];
 }
 
 static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadFunction) {
@@ -482,6 +489,9 @@ static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadF
     result[@"kmallocVerified"] = @NO;
     result[@"kdeallocVerified"] = @NO;
     result[@"rollbackVerified"] = @NO;
+    result[@"kmallocCalled"] = @NO;
+    result[@"kwriteCalled"] = @NO;
+    result[@"kdeallocCalled"] = @NO;
 
     SCKMallocFunction kmallocFunction = (SCKMallocFunction)dlsym(handle, "kmalloc");
     SCKWriteFunction kwriteFunction = (SCKWriteFunction)dlsym(handle, "kwrite");
@@ -505,6 +515,7 @@ static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadF
 
     const size_t testSize = 64;
     uint64_t testAddress = 0;
+    result[@"kmallocCalled"] = @YES;
     int allocStatus = kmallocFunction(&testAddress, testSize);
     result[@"kmallocStatus"] = SCStatusString(allocStatus);
     if (allocStatus != 0 || testAddress == 0) {
@@ -516,81 +527,76 @@ static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadF
     result[@"testAddress"] = SCHexAddress(testAddress);
     result[@"testSize"] = @(testSize);
 
-    uint8_t originalData[testSize];
+    uint8_t originalData[64];
     memset(originalData, 0, testSize);
     int readOriginalStatus = kreadFunction(testAddress, originalData, testSize);
     result[@"readOriginalStatus"] = SCStatusString(readOriginalStatus);
     if (readOriginalStatus != 0) {
         result[@"state"] = @"failed";
         result[@"error"] = @"kread of original allocation failed";
+        result[@"kdeallocCalled"] = @YES;
         kdeallocFunction(testAddress, testSize);
         return result;
     }
     result[@"originalDataHash"] = SCSHA256Hash(originalData, testSize);
 
-    uint8_t testPattern[testSize];
+    uint8_t testPattern[64];
     for (size_t i = 0; i < testSize; i++) {
         testPattern[i] = (uint8_t)(0xA5 ^ (i & 0xFF));
     }
+    result[@"kwriteCalled"] = @YES;
     int writeStatus = kwriteFunction(testPattern, testAddress, testSize);
     result[@"kwriteStatus"] = SCStatusString(writeStatus);
     if (writeStatus != 0) {
         result[@"state"] = @"failed";
         result[@"error"] = @"kwrite of test pattern failed";
+        result[@"kdeallocCalled"] = @YES;
         kdeallocFunction(testAddress, testSize);
         return result;
     }
     result[@"kwriteVerified"] = @YES;
 
-    uint8_t readBackData[testSize];
+    uint8_t readBackData[64];
     memset(readBackData, 0, testSize);
     int readBackStatus = kreadFunction(testAddress, readBackData, testSize);
     result[@"readBackStatus"] = SCStatusString(readBackStatus);
-    if (readBackStatus != 0) {
-        result[@"state"] = @"failed";
-        result[@"error"] = @"kread of test pattern failed";
-        kdeallocFunction(testAddress, testSize);
-        return result;
-    }
-
-    BOOL patternMatch = (memcmp(readBackData, testPattern, testSize) == 0);
+    BOOL patternMatch = readBackStatus == 0 && memcmp(readBackData, testPattern, testSize) == 0;
     result[@"patternMatch"] = @(patternMatch);
-    if (!patternMatch) {
-        result[@"state"] = @"failed";
-        result[@"error"] = @"written pattern does not match read-back";
-        kdeallocFunction(testAddress, testSize);
-        return result;
-    }
 
+    // Once kwrite succeeds, always attempt rollback before returning.
     int restoreStatus = kwriteFunction(originalData, testAddress, testSize);
     result[@"restoreStatus"] = SCStatusString(restoreStatus);
     if (restoreStatus != 0) {
         result[@"state"] = @"quarantined";
         result[@"error"] = @"kwrite of original data failed during rollback";
+        result[@"kdeallocCalled"] = @YES;
         kdeallocFunction(testAddress, testSize);
         return result;
     }
 
-    uint8_t verifyRestoreData[testSize];
+    uint8_t verifyRestoreData[64];
     memset(verifyRestoreData, 0, testSize);
     int verifyReadStatus = kreadFunction(testAddress, verifyRestoreData, testSize);
     result[@"verifyRestoreStatus"] = SCStatusString(verifyReadStatus);
     if (verifyReadStatus != 0) {
         result[@"state"] = @"quarantined";
         result[@"error"] = @"kread of restored data failed during rollback verification";
+        result[@"kdeallocCalled"] = @YES;
         kdeallocFunction(testAddress, testSize);
         return result;
     }
 
-    BOOL restoreMatch = (memcmp(verifyRestoreData, originalData, testSize) == 0);
+    BOOL restoreMatch = verifyReadStatus == 0 && memcmp(verifyRestoreData, originalData, testSize) == 0;
     result[@"rollbackVerified"] = @(restoreMatch);
     if (!restoreMatch) {
         result[@"state"] = @"quarantined";
         result[@"error"] = @"restored data does not match original";
+        result[@"kdeallocCalled"] = @YES;
         kdeallocFunction(testAddress, testSize);
         return result;
     }
 
+    result[@"kdeallocCalled"] = @YES;
     int deallocStatus = kdeallocFunction(testAddress, testSize);
     result[@"kdeallocStatus"] = SCStatusString(deallocStatus);
     if (deallocStatus != 0) {
@@ -599,14 +605,25 @@ static NSDictionary *SCRunPrimitiveSelfTest(void *handle, SCKReadFunction kreadF
         return result;
     }
     result[@"kdeallocVerified"] = @YES;
+
+    if (readBackStatus != 0) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"kread of test pattern failed; rollback succeeded";
+        return result;
+    }
+    if (!patternMatch) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"written pattern did not match; rollback succeeded";
+        return result;
+    }
     result[@"state"] = @"verified";
     return result;
 }
 
-static NSDictionary *SCBuildReport(BOOL runSelfTest) {
+static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest) {
     NSMutableDictionary *report = [NSMutableDictionary dictionary];
     NSISO8601DateFormatter *formatter = [NSISO8601DateFormatter new];
-    report[@"schemaVersion"] = @1;
+    report[@"schemaVersion"] = @2;
     report[@"probeVersion"] = SCProbeVersion;
     report[@"timestamp"] = [formatter stringFromDate:NSDate.date];
     report[@"mode"] = @"read-only";
@@ -649,23 +666,21 @@ static NSDictionary *SCBuildReport(BOOL runSelfTest) {
         krw[@"kernelProbe"] = @{ @"error": @"required kbase or kread export is missing" };
     }
 
-    BOOL runSelfTest = runSelfTest &&
+    BOOL canRunSelfTest = shouldRunSelfTest &&
                        [[exports objectForKey:@"kmalloc"] boolValue] &&
                        [[exports objectForKey:@"kwrite"] boolValue] &&
                        [[exports objectForKey:@"kdealloc"] boolValue] &&
                        kreadFunction != NULL &&
                        [[krw[@"kernelProbe"] objectForKey:@"machOValidated"] boolValue];
 
-    if (runSelfTest) {
+    if (canRunSelfTest) {
         NSDictionary *selfTest = SCRunPrimitiveSelfTest(handle, kreadFunction);
         krw[@"primitiveSelfTest"] = selfTest;
 
         NSMutableDictionary *safety = [report[@"safety"] mutableCopy];
-        safety[@"kmallocCalled"] = @YES;
-        safety[@"kdeallocCalled"] = @YES;
-        if ([[exports objectForKey:@"kwrite"] boolValue]) {
-            safety[@"kwriteCalled"] = @YES;
-        }
+        safety[@"kmallocCalled"] = @([selfTest[@"kmallocCalled"] boolValue]);
+        safety[@"kdeallocCalled"] = @([selfTest[@"kdeallocCalled"] boolValue]);
+        safety[@"kwriteCalled"] = @([selfTest[@"kwriteCalled"] boolValue]);
         report[@"safety"] = safety;
 
         NSString *selfTestState = selfTest[@"state"];
@@ -745,12 +760,13 @@ int main(int argc, char *argv[]) {
             return 2;
         }
 
-        NSString *writeError = nil;
-        BOOL wroteReport = SCWriteReport(report, &writeError);
-        if (!wroteReport && !SCValidateReportContract(report)) {
+        if (!SCValidateReportContract(report)) {
             fprintf(stderr, "Fresh report failed safety contract validation\n");
             return 2;
         }
+
+        NSString *writeError = nil;
+        BOOL wroteReport = SCWriteReport(report, &writeError);
 
         if (printJSON) {
             NSData *json = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:nil];

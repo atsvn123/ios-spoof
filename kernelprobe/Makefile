@@ -8,7 +8,7 @@ TOOL_NAME = sckrwprobe
 
 sckrwprobe_FILES = sckrwprobe.m
 sckrwprobe_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter
-sckrwprobe_FRAMEWORKS = Foundation Security
+sckrwprobe_FRAMEWORKS = Foundation
 sckrwprobe_INSTALL_PATH = /usr/bin
 sckrwprobe_CODESIGN_FLAGS = -Sentitlements.plist
 

@@ -958,20 +958,17 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     if (leNext3 != 0 && !SCKernelPtrValid(leNext3)) continue;
 
                     // Pre-validate: find a pidOff where all 3 procs have valid PIDs.
-                    // This filters out non-proc linked lists (which won't have valid
-                    // PIDs at the same offset across 3 entries).
+                    // kernel_task has p_pid=0, so allow 0. Require all 3 to be
+                    // unique (PIDs are unique per process) and at most 65535.
                     size_t validPidOff = 0;
                     for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
                         uint32_t pid1 = *(uint32_t *)(firstBuf + pidOff);
                         uint32_t pid2 = *(uint32_t *)(secondBuf + pidOff);
                         uint32_t pid3 = *(uint32_t *)(thirdBuf + pidOff);
-                        if (pid1 > 0 && pid1 <= 65535 &&
-                            pid2 > 0 && pid2 <= 65535 &&
-                            pid3 > 0 && pid3 <= 65535) {
-                            if (pid1 != pid2 && pid1 != pid3 && pid2 != pid3) {
-                                validPidOff = pidOff;
-                                break;
-                            }
+                        if (pid1 <= 65535 && pid2 <= 65535 && pid3 <= 65535 &&
+                            pid1 != pid2 && pid1 != pid3 && pid2 != pid3) {
+                            validPidOff = pidOff;
+                            break;
                         }
                     }
                     if (validPidOff == 0) continue;
@@ -997,11 +994,11 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                         for (size_t pidOff = leOff + 16; pidOff + 4 <= maxPidOff && pidOff + 4 <= procBufSize; pidOff += 4) {
                             uint32_t pid = *(uint32_t *)(walkBuf + pidOff);
                             if (pid == (uint32_t)targetPid) {
-                                // Verify: check 3 procs have valid PIDs at this offset
+                                // Verify: check 3 procs have valid unique PIDs at this offset
                                 uint32_t p1 = *(uint32_t *)(firstBuf + pidOff);
                                 uint32_t p2 = *(uint32_t *)(secondBuf + pidOff);
                                 uint32_t p3 = *(uint32_t *)(thirdBuf + pidOff);
-                                if (p1 > 0 && p1 <= 65535 && p2 > 0 && p2 <= 65535 && p3 > 0 && p3 <= 65535 &&
+                                if (p1 <= 65535 && p2 <= 65535 && p3 <= 65535 &&
                                     p1 != p2 && p1 != p3 && p2 != p3) {
                                     free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
                                     diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];

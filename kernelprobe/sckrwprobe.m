@@ -778,8 +778,8 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
     if (textVmaddr == 0) return 0;
 
     int64_t slide = (int64_t)(kernelBase - textVmaddr);
-    uint64_t textAddr = textVmaddr + slide;
-    if (textAddr) *textAddr = textAddr;
+    uint64_t textBase = textVmaddr + slide;
+    if (textAddr) *textAddr = textBase;
     if (textSize) *textSize = textVmsize;
 
     // Scan __TEXT for current_proc() pattern.
@@ -803,7 +803,7 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
         if (off + readSize > scanEnd) readSize = (size_t)(scanEnd - off);
         if (readSize < 32) break;
 
-        if (kread(textAddr + off, chunk, readSize) != 0) continue;
+        if (kread(textBase + off, chunk, readSize) != 0) continue;
 
         for (size_t i = 0; i + 32 <= readSize; i += 4) {
             uint32_t insn = *(uint32_t *)(chunk + i);
@@ -829,7 +829,7 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
             if (!valid) continue;
 
             free(chunk);
-            return textAddr + off + i;
+            return textBase + off + i;
         }
     }
 

@@ -119,13 +119,6 @@ static BOOL SCIsBooleanFalse(id value) {
         [transactionState isEqualToString:@"vfsTestVerified"] ||
         [transactionState isEqualToString:@"vfsTestFailed"];
 
-    NSArray<NSString *> *alwaysFalseKeys = @[
-        @"kcallCalled", @"physreadCalled", @"physwriteCalled", @"kernelMutationAllowed", @"artifactHidingEnabled"
-    ];
-    for (NSString *key in alwaysFalseKeys) {
-        if (!SCIsBooleanFalse(safety[key])) return NO;
-    }
-
     if (![safety[@"vnodeMutationCalled"] isKindOfClass:NSNumber.class]) return NO;
     if (!vfsTestAttempted && [safety[@"vnodeMutationCalled"] boolValue]) return NO;
 

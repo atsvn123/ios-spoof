@@ -784,13 +784,16 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
 
     // Scan __TEXT for current_proc() pattern.
     // arm64 current_proc typically starts with:
-    //   mrs x0, TPIDR_EL1     (0xd5384080  0xd5384020)
-    //   ldr x0, [x0, #...]    (0xf940xxxx)
-    //   ldr x0, [x0, #...]    (0xf940xxxx)
-    //   ldr x0, [x0, #...]    (0xf940xxxx)
-    //   ret                    (0xd65f03c0)
+    //   mrs xN, TPIDR_EL1      (0xd538d080 | Rt)
+    //   ldr xN, [xN, #imm]     (0xf940xxxx, any registers)
+    //   ldr xN, [xN, #imm]     (0xf940xxxx, any registers)
+    //   ldr xN, [xN, #imm]     (0xf940xxxx, any registers)
+    //   ret                     (0xd65f03c0)
     //
-    // We scan for: mrs x0, TPIDR_EL1 followed within 32 bytes by ret
+    // We scan for: mrs xN, TPIDR_EL1 followed by ldr chain and ret within 48 bytes.
+    // mrs xN, TPIDR_EL1 = 0xd538d080 | (Rt), mask 0xFFFFFFE0 = 0xD538D080
+    // ldr xN, [xM, #imm] = 0xf9400000 | (imm12<<10) | (Rn<<5) | Rt, mask 0xFFC00000 = 0xF9400000
+    // ret = 0xd65f03c0
     const size_t scanChunk = 8192;
     uint8_t *chunk = malloc(scanChunk);
     if (!chunk) return 0;
@@ -798,35 +801,31 @@ static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase
     uint64_t scanEnd = textVmsize;
     if (scanEnd > 16 * 1024 * 1024) scanEnd = 16 * 1024 * 1024;
 
-    for (uint64_t off = 0; off < scanEnd; off += scanChunk - 32) {
+    for (uint64_t off = 0; off < scanEnd; off += scanChunk - 48) {
         size_t readSize = scanChunk;
         if (off + readSize > scanEnd) readSize = (size_t)(scanEnd - off);
-        if (readSize < 32) break;
+        if (readSize < 48) break;
 
         if (kread(textBase + off, chunk, readSize) != 0) continue;
 
-        for (size_t i = 0; i + 32 <= readSize; i += 4) {
+        for (size_t i = 0; i + 48 <= readSize; i += 4) {
             uint32_t insn = *(uint32_t *)(chunk + i);
-            // mrs x0, TPIDR_EL1: 0xd5384080
-            if (insn != 0xd5384080) continue;
+            // mrs xN, TPIDR_EL1: mask 0xFFFFFFE0, value 0xD538D080
+            if ((insn & 0xFFFFFFE0) != 0xD538D080) continue;
 
-            // Look for ret within next 28 bytes (7 instructions)
+            // Look for ret within next 44 bytes (11 instructions)
+            // Allow ldr, mov, b instructions between mrs and ret
             BOOL hasRet = NO;
-            for (size_t j = 4; j <= 28; j += 4) {
+            int ldrCount = 0;
+            for (size_t j = 4; j <= 44; j += 4) {
                 uint32_t next = *(uint32_t *)(chunk + i + j);
                 if (next == 0xd65f03c0) { hasRet = YES; break; }
+                // ldr xN, [xM, #imm]
+                if ((next & 0xFFC00000) == 0xF9400000) { ldrCount++; continue; }
+                // Allow other instructions (mov, etc.)
             }
             if (!hasRet) continue;
-
-            // Check that instructions between mrs and ret are ldr x0
-            BOOL valid = YES;
-            for (size_t j = 4; j <= 24; j += 4) {
-                uint32_t next = *(uint32_t *)(chunk + i + j);
-                if (next == 0xd65f03c0) break;
-                // ldr x0, [x0, #imm]: 0xf9400xxx (bits 31-22 = 1111100101, Rt=0)
-                if ((next & 0xFFC003FF) != 0xF9400000) { valid = NO; break; }
-            }
-            if (!valid) continue;
+            if (ldrCount < 2) continue;
 
             free(chunk);
             return textBase + off + i;

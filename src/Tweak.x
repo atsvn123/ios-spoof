@@ -33,29 +33,19 @@
 #import <IOKit/IOKitLib.h>
 
 // ============================================================================
-//  DYLD_INTERPOSE — rewrite GOT entries at dyld link time.
+//  fishhook — rewrite GOT entries at runtime, inside the shouldInject gate.
 //
-//  Unlike MSHookFunction (inline hook = overwrites function prologue bytes),
-//  DYLD_INTERPOSE patches only the GOT/PLT binding tables. The original
-//  function bytes in libsystem are NEVER modified.
+//  Unlike DYLD_INTERPOSE (which fires for every process dylib is loaded into
+//  because the __DATA,__interpose section is processed by dyld unconditionally),
+//  fishhook rebind_symbols() is called explicitly inside %ctor after the
+//  shouldInjectForCurrentBundle check. Processes not in the target list never
+//  get their GOT patched → zero hooking artifacts → no mã lỗi 3.
 //
-//  Security SDKs (e.g. build-info.framework) detect injection by reading
-//  the first 4-8 bytes of standard libc functions (getenv, open, stat…)
-//  and checking for a branch instruction to an unknown address — the classic
-//  MSHookFunction trampoline signature. DYLD_INTERPOSE is invisible to this
-//  technique because the function prologues remain byte-for-byte identical
-//  to a stock iOS install.
-//
-//  DYLD_INTERPOSE declarations must be at file scope (not inside any function).
-//  They are placed after all sc_* function definitions (see end of section 6).
+//  Unlike MSHookFunction (inline hook = overwrites prologue bytes with a branch
+//  trampoline), fishhook only overwrites the GOT/PLT pointer slot.
+//  MSHookFunction detection reads the first 4-8 bytes of the function in
+//  libsystem_c.dylib — those bytes are never touched by fishhook.
 // ============================================================================
-#define DYLD_INTERPOSE(_replacement, _replacee)                                  \
-    __attribute__((used)) static struct {                                         \
-        const void *replacement; const void *replacee;                           \
-    } _interpose_##_replacee                                                      \
-    __attribute__((section("__DATA,__interpose"), aligned(sizeof(void *)))) = {  \
-        (const void *)&(_replacement), (const void *)&(_replacee)                \
-    };
 
 @class WKWebViewConfiguration;
 @class WKUserContentController;
@@ -125,8 +115,7 @@ static void SCUpdateCFlags(void) {
 }
 
 // sc_hook_depth removed — was a no-op reentrancy guard (never incremented).
-// Not needed with DYLD_INTERPOSE: no reentrancy risk since we call the real
-// symbol directly (GOT redirect only affects external callers, not our own dylib).
+// Not needed with fishhook: no reentrancy risk since we call orig_* directly.
 
 static unsigned long long SCFakeTotalBytes(void) {
     NSUInteger gb = CFG().totalStorage;
@@ -1119,18 +1108,12 @@ static int sc_open(const char *path, int flags, ...) {
 }
 %end
 
-// getenv — two-tier design (see comment above sc_c_hide_jb declaration)
-//
-// Tier 1 (always active, before UIApplicationMain):
-//   DYLD_INSERT_LIBRARIES → "" (empty, never NULL).
-//   Security SDKs scan this env var in __mod_init_func. Returning NULL causes
-//   NULL+offset dereference. Returning "" = "clean environment" to any check
-//   of the form `if (val && strstr(val, "substrate"))`.
-//
-// Tier 2 (after UIApplicationMain, sc_c_hide_jb=YES):
-//   All other JB env vars → NULL.
+// getenv — two-tier design:
+// Tier 1: DYLD_INSERT_LIBRARIES → "" to prevent NULL dereference in __mod_init_func
+// Tier 2: all other JB env vars blocked when sc_c_hide_jb=YES
+static char *(*orig_getenv)(const char *) = NULL;
 static char *sc_getenv(const char *name) {
-    if (!name) return getenv(name);
+    if (!name) return (orig_getenv ? orig_getenv(name) : getenv(name));
     if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0) return (char *)"";
     if (atomic_load(&sc_c_hide_jb)) {
         if (strcmp(name, "_MSSafeMode") == 0 ||
@@ -1147,9 +1130,8 @@ static char *sc_getenv(const char *name) {
             return NULL;
         }
     }
-    return getenv(name);
+    return orig_getenv ? orig_getenv(name) : getenv(name);
 }
-DYLD_INTERPOSE(sc_getenv, getenv)
 
 // fopen — hide jailbreak files (fishhook GOT rewrite)
 static FILE *(*orig_fopen)(const char *, const char *) = NULL;
@@ -1160,32 +1142,33 @@ static FILE *sc_fopen(const char *path, const char *mode) {
 }
 
 // dlopen — block jailbreak dylibs (pure C, no ObjC)
+static void *(*orig_dlopen)(const char *, int) = NULL;
 static void *sc_dlopen(const char *path, int mode) {
     if (path && atomic_load(&sc_c_hide_jb)) {
         for (int i = 0; sc_jb_dylib_c[i]; i++) {
             if (strstr(path, sc_jb_dylib_c[i])) return NULL;
         }
     }
-    return dlopen(path, mode);
+    return orig_dlopen ? orig_dlopen(path, mode) : dlopen(path, mode);
 }
-DYLD_INTERPOSE(sc_dlopen, dlopen)
 
 // fork — banking apps probe this to confirm JB
+static pid_t (*orig_fork)(void) = NULL;
 static pid_t sc_fork(void) {
     if (atomic_load(&sc_c_hide_jb)) { errno = ENOSYS; return -1; }
-    return fork();
+    return orig_fork ? orig_fork() : fork();
 }
-DYLD_INTERPOSE(sc_fork, fork)
 
 // task_for_pid — debugger/JB detection
+static kern_return_t (*orig_task_for_pid)(mach_port_name_t, int, mach_port_name_t *) = NULL;
 static kern_return_t sc_task_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *t) {
     if (atomic_load(&sc_c_hide_jb)) {
         if (t) *t = MACH_PORT_NULL;
         return KERN_FAILURE;
     }
-    return task_for_pid(target_tport, pid, t);
+    return orig_task_for_pid ? orig_task_for_pid(target_tport, pid, t)
+                             : task_for_pid(target_tport, pid, t);
 }
-DYLD_INTERPOSE(sc_task_for_pid, task_for_pid)
 
 // ============================================================================
 //  dyld image list hiding — proper index remapping
@@ -1385,8 +1368,9 @@ static int sc_proc_name(pid_t pid, void *buffer, uint32_t buffersize) {
 // static int (*orig_proc_listpids)(uint32_t, uint32_t, void *, uint32_t);
 
 // readlink — hide JB symlink targets
+static ssize_t (*orig_readlink)(const char *, char *, size_t) = NULL;
 static ssize_t sc_readlink(const char *path, char *buf, size_t bufsize) {
-    ssize_t r = readlink(path, buf, bufsize);
+    ssize_t r = orig_readlink ? orig_readlink(path, buf, bufsize) : readlink(path, buf, bufsize);
     if (r > 0 && atomic_load(&sc_c_hide_jb) && path && buf) {
         if (sc_is_jb_path_c(buf) || sc_is_jb_proc_c(buf)) {
             strlcpy(buf, "/usr/lib", bufsize);
@@ -1395,18 +1379,17 @@ static ssize_t sc_readlink(const char *path, char *buf, size_t bufsize) {
     }
     return r;
 }
-DYLD_INTERPOSE(sc_readlink, readlink)
 
 // realpath — hide resolved JB paths
+static char *(*orig_realpath)(const char *, char *) = NULL;
 static char *sc_realpath(const char *path, char *resolved) {
-    char *r = realpath(path, resolved);
+    char *r = orig_realpath ? orig_realpath(path, resolved) : realpath(path, resolved);
     if (r && atomic_load(&sc_c_hide_jb) && path) {
         if (sc_is_jb_path_c(r) || sc_is_jb_proc_c(r))
             strlcpy(r, path, PATH_MAX);
     }
     return r;
 }
-DYLD_INTERPOSE(sc_realpath, realpath)
 
 // posix_spawn — strip JB env vars from child process
 static const char * const sc_posix_spawn_strip_prefixes[] = {
@@ -1419,19 +1402,26 @@ static const char * const sc_posix_spawn_strip_prefixes[] = {
     NULL
 };
 
+static int (*orig_posix_spawn)(pid_t *, const char *,
+                               const posix_spawn_file_actions_t *,
+                               const posix_spawnattr_t *,
+                               char *const [], char *const []) = NULL;
 static int sc_posix_spawn(pid_t *pid, const char *path,
                           const posix_spawn_file_actions_t *file_actions,
                           const posix_spawnattr_t *attrp,
                           char *const argv[], char *const envp[]) {
+    typedef int (*fn_t)(pid_t *, const char *, const posix_spawn_file_actions_t *,
+                        const posix_spawnattr_t *, char *const [], char *const []);
+    fn_t real = (fn_t)(orig_posix_spawn ? (void *)orig_posix_spawn : (void *)posix_spawn);
     if (!atomic_load(&sc_c_hide_jb) || !envp)
-        return posix_spawn(pid, path, file_actions, attrp, argv, envp);
+        return real(pid, path, file_actions, attrp, argv, envp);
 
     int total = 0;
     while (envp[total]) total++;
 
     char **newEnvp = (char **)calloc((size_t)(total + 1), sizeof(char *));
     if (!newEnvp)
-        return posix_spawn(pid, path, file_actions, attrp, argv, envp);
+        return real(pid, path, file_actions, attrp, argv, envp);
 
     int count = 0;
     for (int i = 0; i < total; i++) {
@@ -1446,11 +1436,10 @@ static int sc_posix_spawn(pid_t *pid, const char *path,
     }
     newEnvp[count] = NULL;
 
-    int r = posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
+    int r = real(pid, path, file_actions, attrp, argv, newEnvp);
     free(newEnvp);
     return r;
 }
-DYLD_INTERPOSE(sc_posix_spawn, posix_spawn)
 
 // ============================================================================
 //  6c. Mach-level anti-detection (roothide does NOT cover these)
@@ -1971,33 +1960,46 @@ static void SCInstallMobileGestaltHooks(void) {
         MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
         MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
         MSHookFunction((void *)&CFPreferencesCopyAppValue, (void *)sc_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue);
-        // readlink / realpath: now DYLD_INTERPOSE — no MSHookFunction needed
+        // readlink / realpath: fishhook GOT rewrite in all_hooks block below
         SCInstallWebKitHooks();
         SCInstallSystemVersionHooks();
         SCInstallMobileGestaltHooks();
 
         // ----------------------------------------------------------------
-        //  Filesystem JB-hiding — fishhook GOT rewrite (no prologue patch).
-        //  rebind_symbols() overwrites __DATA GOT slots in every loaded image.
-        //  The prologue bytes in libsystem are untouched → prologue scanners
-        //  (like build-info.framework) see clean, unmodified bytes.
+        //  All C hooks via fishhook rebind_symbols — single call covers:
+        //  - Filesystem JB hiding: access/stat/lstat/open/fopen
+        //  - Environment hiding: getenv
+        //  - Process isolation: dlopen, fork, task_for_pid
+        //  - Path resolution: readlink, realpath
+        //  - Child process: posix_spawn
         //
-        //  rebind_symbols also registers _dyld_register_func_for_add_image so
-        //  any framework loaded AFTER this point also gets the rebinding.
+        //  rebind_symbols() overwrites __DATA GOT slots in every loaded image.
+        //  Prologue bytes in libsystem are untouched → prologue scanners see
+        //  clean, unmodified bytes. Also registers _dyld_register_func_for_add_image
+        //  so any framework loaded AFTER this point also gets the rebinding.
+        //  ALL hooks are installed inside the shouldInjectForCurrentBundle gate →
+        //  processes not in the target list get zero GOT modifications.
         // ----------------------------------------------------------------
         {
-            struct rebinding fs_hooks[] = {
-                { "access", (void *)sc_access, (void **)&orig_access },
-                { "stat",   (void *)sc_stat,   (void **)&orig_stat   },
-                { "lstat",  (void *)sc_lstat,  (void **)&orig_lstat  },
-                { "open",   (void *)sc_open,   (void **)&orig_open   },
-                { "fopen",  (void *)sc_fopen,  (void **)&orig_fopen  },
+            struct rebinding all_hooks[] = {
+                { "access",       (void *)sc_access,       (void **)&orig_access       },
+                { "stat",         (void *)sc_stat,         (void **)&orig_stat         },
+                { "lstat",        (void *)sc_lstat,        (void **)&orig_lstat        },
+                { "open",         (void *)sc_open,         (void **)&orig_open         },
+                { "fopen",        (void *)sc_fopen,        (void **)&orig_fopen        },
+                { "getenv",       (void *)sc_getenv,       (void **)&orig_getenv       },
+                { "dlopen",       (void *)sc_dlopen,       (void **)&orig_dlopen       },
+                { "fork",         (void *)sc_fork,         (void **)&orig_fork         },
+                { "task_for_pid", (void *)sc_task_for_pid, (void **)&orig_task_for_pid },
+                { "readlink",     (void *)sc_readlink,     (void **)&orig_readlink     },
+                { "realpath",     (void *)sc_realpath,     (void **)&orig_realpath     },
+                { "posix_spawn",  (void *)sc_posix_spawn,  (void **)&orig_posix_spawn  },
             };
-            rebind_symbols(fs_hooks, sizeof(fs_hooks) / sizeof(fs_hooks[0]));
+            rebind_symbols(all_hooks, sizeof(all_hooks) / sizeof(all_hooks[0]));
         }
 
         // proc_pidpath / proc_name still need MSHookFunction (not exported
-        // symbols — looked up via dlsym at runtime, can't use DYLD_INTERPOSE)
+        // symbols — looked up via dlsym at runtime, fishhook needs a symbol name)
         void *sym_pidpath = dlsym(RTLD_DEFAULT, "proc_pidpath");
         void *sym_procname = dlsym(RTLD_DEFAULT, "proc_name");
         if (sym_pidpath)  MSHookFunction(sym_pidpath,  (void *)sc_proc_pidpath,  (void **)&orig_proc_pidpath);
@@ -2007,8 +2009,8 @@ static void SCInstallMobileGestaltHooks(void) {
         void *sym_csops = dlsym(RTLD_DEFAULT, "csops");
         if (sym_csops) MSHookFunction(sym_csops, (void *)sc_csops, (void **)&orig_csops);
 
-        // dyld image list — index-remapping hooks (no DYLD_INTERPOSE equivalent
-        // for these: _dyld_* are dyld-internal, not re-exported libc symbols)
+        // dyld image list — index-remapping hooks (_dyld_* are dyld-internal,
+        // not re-exported libc symbols — fishhook can't find them by name)
         MSHookFunction((void *)&_dyld_image_count,
                        (void *)sc_dyld_image_count,
                        (void **)&orig_dyld_image_count);

@@ -31,6 +31,31 @@
 #include <stdatomic.h>  // atomic_load / atomic_store / _Atomic
 #import <IOKit/IOKitLib.h>
 
+// ============================================================================
+//  DYLD_INTERPOSE — rewrite GOT entries at dyld link time.
+//
+//  Unlike MSHookFunction (inline hook = overwrites function prologue bytes),
+//  DYLD_INTERPOSE patches only the GOT/PLT binding tables. The original
+//  function bytes in libsystem are NEVER modified.
+//
+//  Security SDKs (e.g. build-info.framework) detect injection by reading
+//  the first 4-8 bytes of standard libc functions (getenv, open, stat…)
+//  and checking for a branch instruction to an unknown address — the classic
+//  MSHookFunction trampoline signature. DYLD_INTERPOSE is invisible to this
+//  technique because the function prologues remain byte-for-byte identical
+//  to a stock iOS install.
+//
+//  DYLD_INTERPOSE declarations must be at file scope (not inside any function).
+//  They are placed after all sc_* function definitions (see end of section 6).
+// ============================================================================
+#define DYLD_INTERPOSE(_replacement, _replacee)                                  \
+    __attribute__((used)) static struct {                                         \
+        const void *replacement; const void *replacee;                           \
+    } _interpose_##_replacee                                                      \
+    __attribute__((section("__DATA,__interpose"), aligned(sizeof(void *)))) = {  \
+        (const void *)&(_replacement), (const void *)&(_replacee)                \
+    }
+
 @class WKWebViewConfiguration;
 @class WKUserContentController;
 
@@ -98,10 +123,9 @@ static void SCUpdateCFlags(void) {
     atomic_store(&sc_c_hide_jb, hjb);
 }
 
-// Per-thread reentrancy guard — no longer needed since all C hooks are pure-C
-// (no ObjC calls in hot path). Kept as 0 constant so existing checks are no-ops.
-// Do NOT increment this — it was never incremented, so existing guards always pass.
-static __thread int sc_hook_depth = 0; // always 0; checks are benign no-ops
+// sc_hook_depth removed — was a no-op reentrancy guard (never incremented).
+// Not needed with DYLD_INTERPOSE: no reentrancy risk since we call the real
+// symbol directly (GOT redirect only affects external callers, not our own dylib).
 
 static unsigned long long SCFakeTotalBytes(void) {
     NSUInteger gb = CFG().totalStorage;
@@ -1004,46 +1028,47 @@ static BOOL sc_is_jb_path(NSString *p) {
     return NO;
 }
 
-static int (*orig_access)(const char *, int);
+// ── DYLD_INTERPOSE replacements ──────────────────────────────────────────────
+// No orig_* pointers needed: DYLD_INTERPOSE does NOT patch the GOT inside our
+// own dylib, so calling access/stat/open/… directly from sc_* goes straight to
+// libsystem — no trampoline, no recursion, no prologue modification.
+
 static int sc_access(const char *path, int mode) {
-    if (!path) return orig_access(path, mode);
-    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
-        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
+    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+        errno = ENOENT; return -1;
     }
-    return orig_access(path, mode);
+    return access(path, mode);
 }
+DYLD_INTERPOSE(sc_access, access)
 
-static int (*orig_stat)(const char *, struct stat *);
 static int sc_stat(const char *path, struct stat *buf) {
-    if (!path) return orig_stat(path, buf);
-    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
-        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
+    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+        errno = ENOENT; return -1;
     }
-    return orig_stat(path, buf);
+    return stat(path, buf);
 }
+DYLD_INTERPOSE(sc_stat, stat)
 
-static int (*orig_lstat)(const char *, struct stat *);
 static int sc_lstat(const char *path, struct stat *buf) {
-    if (!path) return orig_lstat(path, buf);
-    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
-        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
+    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+        errno = ENOENT; return -1;
     }
-    return orig_lstat(path, buf);
+    return lstat(path, buf);
 }
+DYLD_INTERPOSE(sc_lstat, lstat)
 
-static int (*orig_open)(const char *, int, ...);
 static int sc_open(const char *path, int flags, ...) {
     mode_t mode = 0;
     if (flags & O_CREAT) {
         va_list ap; va_start(ap, flags);
         mode = va_arg(ap, int); va_end(ap);
     }
-    if (!path) return orig_open(path, flags, mode);
-    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
-        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
+    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+        errno = ENOENT; return -1;
     }
-    return orig_open(path, flags, mode);
+    return open(path, flags, mode);
 }
+DYLD_INTERPOSE(sc_open, open)
 
 // Hook canOpenURL cho scheme cydia://, sileo://
 %hook UIApplication
@@ -1068,31 +1093,19 @@ static int sc_open(const char *path, int flags, ...) {
 }
 %end
 
-// Hook getenv - hide jailbreak env vars
+// getenv — two-tier design (see comment above sc_c_hide_jb declaration)
 //
-// CRITICAL — two-tier design:
+// Tier 1 (always active, before UIApplicationMain):
+//   DYLD_INSERT_LIBRARIES → "" (empty, never NULL).
+//   Security SDKs scan this env var in __mod_init_func. Returning NULL causes
+//   NULL+offset dereference. Returning "" = "clean environment" to any check
+//   of the form `if (val && strstr(val, "substrate"))`.
 //
-// Tier 1 (always active, even before UIApplicationMain):
-//   DYLD_INSERT_LIBRARIES → return "" (empty string, NOT null).
-//   Security SDKs call getenv("DYLD_INSERT_LIBRARIES") in their __mod_init_func
-//   and assume it is non-NULL (they know they run in a jailbreak environment).
-//   Returning NULL causes NULL+offset → SIGSEGV in their initializer.
-//   Returning "" = "no libraries injected" — indistinguishable from stock iOS to
-//   any check of the form `if (val && strstr(val, "substrate"))`.
-//
-// Tier 2 (only when sc_c_hide_jb is active, i.e. after UIApplicationMain):
-//   All other JB env vars → return NULL (variable does not exist).
-//   These are not called during early init so NULL is safe here.
-static char *(*orig_getenv)(const char *);
+// Tier 2 (after UIApplicationMain, sc_c_hide_jb=YES):
+//   All other JB env vars → NULL.
 static char *sc_getenv(const char *name) {
-    if (!name) return orig_getenv(name);
-
-    // Tier 1: always hide DYLD_INSERT_LIBRARIES with empty string, not NULL.
-    // This is safe at any call site: an empty string passes every
-    // `if (val != NULL)` guard but contains no suspicious dylib paths.
+    if (!name) return getenv(name);
     if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0) return (char *)"";
-
-    // Tier 2: hide other JB markers only after app has fully initialized.
     if (atomic_load(&sc_c_hide_jb)) {
         if (strcmp(name, "_MSSafeMode") == 0 ||
             strcmp(name, "SUBSTRATE_HOME") == 0 ||
@@ -1108,49 +1121,44 @@ static char *sc_getenv(const char *name) {
             return NULL;
         }
     }
-    return orig_getenv(name);
+    return getenv(name);
 }
+DYLD_INTERPOSE(sc_getenv, getenv)
 
-// fopen hook - hide jailbreak files
-static FILE *(*orig_fopen)(const char *, const char *);
+// fopen — hide jailbreak files
 static FILE *sc_fopen(const char *path, const char *mode) {
-    if (!path) return orig_fopen(path, mode);
-    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
-        if (sc_is_jb_path_c(path)) return NULL;
-    }
-    return orig_fopen(path, mode);
+    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) return NULL;
+    return fopen(path, mode);
 }
+DYLD_INTERPOSE(sc_fopen, fopen)
 
-// dlopen hook - block jailbreak dylibs
-// CRITICAL: dyld holds its own lock when calling dlopen. NEVER call ObjC here.
-// Pure C strstr only.
-static void *(*orig_dlopen)(const char *, int);
+// dlopen — block jailbreak dylibs (pure C, no ObjC)
 static void *sc_dlopen(const char *path, int mode) {
-    if (!path) return orig_dlopen(path, mode);
-    if (atomic_load(&sc_c_hide_jb)) {
+    if (path && atomic_load(&sc_c_hide_jb)) {
         for (int i = 0; sc_jb_dylib_c[i]; i++) {
             if (strstr(path, sc_jb_dylib_c[i])) return NULL;
         }
     }
-    return orig_dlopen(path, mode);
+    return dlopen(path, mode);
 }
+DYLD_INTERPOSE(sc_dlopen, dlopen)
 
-// fork() - banking apps check if fork() works
-static int (*orig_fork)(void);
+// fork — banking apps probe this to confirm JB
 static pid_t sc_fork(void) {
     if (atomic_load(&sc_c_hide_jb)) { errno = ENOSYS; return -1; }
-    return orig_fork();
+    return fork();
 }
+DYLD_INTERPOSE(sc_fork, fork)
 
-// task_for_pid - banking apps detect debugger/jailbreak
-static int (*orig_task_for_pid)(pid_t, mach_port_t *);
-static int sc_task_for_pid(pid_t pid, mach_port_t *t) {
+// task_for_pid — debugger/JB detection
+static kern_return_t sc_task_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *t) {
     if (atomic_load(&sc_c_hide_jb)) {
         if (t) *t = MACH_PORT_NULL;
-        return 5; // KERN_FAILURE
+        return KERN_FAILURE;
     }
-    return orig_task_for_pid(pid, t);
+    return task_for_pid(target_tport, pid, t);
 }
+DYLD_INTERPOSE(sc_task_for_pid, task_for_pid)
 
 // ============================================================================
 //  dyld image list hiding — proper index remapping
@@ -1185,8 +1193,22 @@ static uint32_t  sc_dyld_real_count_last = 0;
 // ObjC runtime internally calls _dyld_get_image_name, which re-enters
 // sc_dyld_get_image_name, which tries to re-acquire sc_dyld_mutex on the
 // same thread — PTHREAD_MUTEX_INITIALIZER is non-recursive → deadlock.
+//
+// This filter is UNCONDITIONAL — it runs regardless of sc_c_hide_jb.
+// Security SDKs (e.g. build-info.framework) scan the dyld image list in
+// their __mod_init_func, before UIApplicationMain, before any user-facing
+// config is available. We must be invisible from the very first query.
 static BOOL sc_is_jb_dylib_name(const char *name) {
     if (!name) return NO;
+    // Path-based filters: anything loaded from JB locations is hidden.
+    // This catches all TweakInject dylibs regardless of their filename.
+    if (strstr(name, ".jbroot"))           return YES;
+    if (strstr(name, "/TweakInject/"))     return YES;
+    if (strstr(name, "/DynamicPatches/"))  return YES;
+    if (strstr(name, "systemhook-"))       return YES;
+    if (strstr(name, "/var/jb/"))          return YES;
+    if (strstr(name, "/private/preboot/")) return YES;
+    // Name-based filters for known JB dylibs that may not be in JB paths.
     for (int i = 0; sc_jb_dylib_c[i]; i++) {
         if (strstr(name, sc_jb_dylib_c[i])) return YES;
     }
@@ -1215,7 +1237,6 @@ static void sc_rebuild_dyld_map_locked(uint32_t real_count) {
 
 static uint32_t sc_dyld_image_count(void) {
     uint32_t real = orig_dyld_image_count();
-    if (!atomic_load(&sc_c_hide_jb)) return real;
     pthread_mutex_lock(&sc_dyld_mutex);
     if (real != sc_dyld_real_count_last) {
         sc_rebuild_dyld_map_locked(real);
@@ -1226,9 +1247,6 @@ static uint32_t sc_dyld_image_count(void) {
 }
 
 static const char *sc_dyld_get_image_name(uint32_t image_index) {
-    if (!atomic_load(&sc_c_hide_jb)) {
-        return orig_dyld_get_image_name(image_index);
-    }
     pthread_mutex_lock(&sc_dyld_mutex);
     uint32_t real = orig_dyld_image_count();
     if (real != sc_dyld_real_count_last) {
@@ -1243,10 +1261,11 @@ static const char *sc_dyld_get_image_name(uint32_t image_index) {
 }
 
 static const struct mach_header *sc_dyld_get_image_header(uint32_t image_index) {
-    if (!atomic_load(&sc_c_hide_jb)) {
-        return orig_dyld_get_image_header(image_index);
-    }
     pthread_mutex_lock(&sc_dyld_mutex);
+    uint32_t real = orig_dyld_image_count();
+    if (real != sc_dyld_real_count_last) {
+        sc_rebuild_dyld_map_locked(real);
+    }
     const struct mach_header *hdr = NULL;
     if (image_index < sc_dyld_visible_count) {
         hdr = orig_dyld_get_image_header(sc_dyld_visible_indices[image_index]);
@@ -1256,10 +1275,11 @@ static const struct mach_header *sc_dyld_get_image_header(uint32_t image_index) 
 }
 
 static intptr_t sc_dyld_get_image_vmaddr_slide(uint32_t image_index) {
-    if (!atomic_load(&sc_c_hide_jb)) {
-        return orig_dyld_get_image_vmaddr_slide(image_index);
-    }
     pthread_mutex_lock(&sc_dyld_mutex);
+    uint32_t real = orig_dyld_image_count();
+    if (real != sc_dyld_real_count_last) {
+        sc_rebuild_dyld_map_locked(real);
+    }
     intptr_t slide = 0;
     if (image_index < sc_dyld_visible_count) {
         slide = orig_dyld_get_image_vmaddr_slide(sc_dyld_visible_indices[image_index]);
@@ -1337,35 +1357,31 @@ static int sc_proc_name(pid_t pid, void *buffer, uint32_t buffersize) {
 // proc_listpids — DISABLED: causes crash, proc_pidpath/proc_name are sufficient
 // static int (*orig_proc_listpids)(uint32_t, uint32_t, void *, uint32_t);
 
-// /proc/self/environ — banking apps read this file to get DYLD_INSERT_LIBRARIES
-// Hook open/read for /proc paths
-static ssize_t (*orig_readlink)(const char *, char *, size_t);
+// readlink — hide JB symlink targets
 static ssize_t sc_readlink(const char *path, char *buf, size_t bufsize) {
-    ssize_t r = orig_readlink(path, buf, bufsize);
+    ssize_t r = readlink(path, buf, bufsize);
     if (r > 0 && atomic_load(&sc_c_hide_jb) && path && buf) {
-        // If the symlink target resolves into a JB path, hide it
         if (sc_is_jb_path_c(buf) || sc_is_jb_proc_c(buf)) {
             strlcpy(buf, "/usr/lib", bufsize);
-            r = strlen(buf);
+            r = (ssize_t)strlen(buf);
         }
     }
     return r;
 }
+DYLD_INTERPOSE(sc_readlink, readlink)
 
-// realpath — resolve symlinks, banking apps use to detect jbroot
-static char *(*orig_realpath)(const char *, char *);
+// realpath — hide resolved JB paths
 static char *sc_realpath(const char *path, char *resolved) {
-    char *r = orig_realpath(path, resolved);
+    char *r = realpath(path, resolved);
     if (r && atomic_load(&sc_c_hide_jb) && path) {
-        if (sc_is_jb_path_c(r) || sc_is_jb_proc_c(r)) {
-            // Return the original (un-resolved) path to avoid leaking jbroot
+        if (sc_is_jb_path_c(r) || sc_is_jb_proc_c(r))
             strlcpy(r, path, PATH_MAX);
-        }
     }
     return r;
 }
+DYLD_INTERPOSE(sc_realpath, realpath)
 
-// posix_spawn — strip DYLD_INSERT_LIBRARIES from child process env (pure C, no ObjC)
+// posix_spawn — strip JB env vars from child process
 static const char * const sc_posix_spawn_strip_prefixes[] = {
     "DYLD_INSERT_LIBRARIES=",
     "_MSSafeMode=",
@@ -1376,19 +1392,19 @@ static const char * const sc_posix_spawn_strip_prefixes[] = {
     NULL
 };
 
-static int (*orig_posix_spawn)(pid_t *, const char *, const posix_spawn_file_actions_t *, const posix_spawnattr_t *, char *const[], char *const[]);
-static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *file_actions, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]) {
+static int sc_posix_spawn(pid_t *pid, const char *path,
+                          const posix_spawn_file_actions_t *file_actions,
+                          const posix_spawnattr_t *attrp,
+                          char *const argv[], char *const envp[]) {
     if (!atomic_load(&sc_c_hide_jb) || !envp)
-        return orig_posix_spawn(pid, path, file_actions, attrp, argv, envp);
+        return posix_spawn(pid, path, file_actions, attrp, argv, envp);
 
-    // Count envp entries
     int total = 0;
     while (envp[total]) total++;
 
-    // Build filtered env on stack for small envs, heap for large
     char **newEnvp = (char **)calloc((size_t)(total + 1), sizeof(char *));
     if (!newEnvp)
-        return orig_posix_spawn(pid, path, file_actions, attrp, argv, envp);
+        return posix_spawn(pid, path, file_actions, attrp, argv, envp);
 
     int count = 0;
     for (int i = 0; i < total; i++) {
@@ -1396,18 +1412,18 @@ static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_a
         for (int j = 0; sc_posix_spawn_strip_prefixes[j]; j++) {
             if (strncmp(envp[i], sc_posix_spawn_strip_prefixes[j],
                         strlen(sc_posix_spawn_strip_prefixes[j])) == 0) {
-                strip = YES;
-                break;
+                strip = YES; break;
             }
         }
         if (!strip) newEnvp[count++] = envp[i];
     }
     newEnvp[count] = NULL;
 
-    int r = orig_posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
+    int r = posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
     free(newEnvp);
     return r;
 }
+DYLD_INTERPOSE(sc_posix_spawn, posix_spawn)
 
 // ============================================================================
 //  6c. Mach-level anti-detection (roothide does NOT cover these)
@@ -1928,38 +1944,32 @@ static void SCInstallMobileGestaltHooks(void) {
         MSHookFunction((void *)&time, (void *)sc_time, (void **)&orig_time);
         MSHookFunction((void *)&gettimeofday, (void *)sc_gettimeofday, (void **)&orig_gettimeofday);
         MSHookFunction((void *)&CFPreferencesCopyAppValue, (void *)sc_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue);
-        MSHookFunction((void *)&readlink, (void *)sc_readlink, (void **)&orig_readlink);
-        MSHookFunction((void *)&realpath, (void *)sc_realpath, (void **)&orig_realpath);
+        // readlink / realpath: now DYLD_INTERPOSE — no MSHookFunction needed
         SCInstallWebKitHooks();
         SCInstallSystemVersionHooks();
         SCInstallMobileGestaltHooks();
 
         // ----------------------------------------------------------------
-        //  Jailbreak hiding hooks — previously defined but never installed
+        //  JB hiding C hooks moved to DYLD_INTERPOSE (file scope, above).
+        //  access / stat / lstat / open / fopen / getenv / dlopen / fork /
+        //  posix_spawn / readlink / realpath — NO MSHookFunction here.
+        //  DYLD_INTERPOSE patches GOT entries without touching function
+        //  prologues, so build-info prologue scanner sees clean bytes.
         // ----------------------------------------------------------------
-        MSHookFunction((void *)&access,  (void *)sc_access,  (void **)&orig_access);
-        MSHookFunction((void *)&stat,    (void *)sc_stat,    (void **)&orig_stat);
-        MSHookFunction((void *)&lstat,   (void *)sc_lstat,   (void **)&orig_lstat);
-        MSHookFunction((void *)&open,    (void *)sc_open,    (void **)&orig_open);
-        MSHookFunction((void *)&fopen,   (void *)sc_fopen,   (void **)&orig_fopen);
-        MSHookFunction((void *)&getenv,  (void *)sc_getenv,  (void **)&orig_getenv);
-        MSHookFunction((void *)&dlopen,  (void *)sc_dlopen,  (void **)&orig_dlopen);
-        MSHookFunction((void *)&fork,    (void *)sc_fork,    (void **)&orig_fork);
-        MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
 
-        // proc_pidpath / proc_name (libproc — may not exist on all iOS)
-        void *libproc = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_NOW | RTLD_NOLOAD);
-        if (!libproc) libproc = dlopen("/usr/lib/system/libsystem_c.dylib", RTLD_NOW | RTLD_NOLOAD);
+        // proc_pidpath / proc_name still need MSHookFunction (not exported
+        // symbols — looked up via dlsym at runtime, can't use DYLD_INTERPOSE)
         void *sym_pidpath = dlsym(RTLD_DEFAULT, "proc_pidpath");
         void *sym_procname = dlsym(RTLD_DEFAULT, "proc_name");
         if (sym_pidpath)  MSHookFunction(sym_pidpath,  (void *)sc_proc_pidpath,  (void **)&orig_proc_pidpath);
         if (sym_procname) MSHookFunction(sym_procname, (void *)sc_proc_name,     (void **)&orig_proc_name);
 
-        // csops
+        // csops — same, runtime-looked-up symbol
         void *sym_csops = dlsym(RTLD_DEFAULT, "csops");
         if (sym_csops) MSHookFunction(sym_csops, (void *)sc_csops, (void **)&orig_csops);
 
-        // dyld image list — index-remapping hooks
+        // dyld image list — index-remapping hooks (no DYLD_INTERPOSE equivalent
+        // for these: _dyld_* are dyld-internal, not re-exported libc symbols)
         MSHookFunction((void *)&_dyld_image_count,
                        (void *)sc_dyld_image_count,
                        (void **)&orig_dyld_image_count);
@@ -1973,9 +1983,8 @@ static void SCInstallMobileGestaltHooks(void) {
                        (void *)sc_dyld_get_image_vmaddr_slide,
                        (void **)&orig_dyld_get_image_vmaddr_slide);
 
-        // IMPORTANT: do NOT call SCUpdateCFlags() here.
-        // JB hooks are installed but sc_c_hide_jb stays NO until
-        // UIApplicationMain fires — see sc_UIApplicationMain comment.
+        // UIApplicationMain — defer sc_c_hide_jb activation until after all
+        // __mod_init_func initializers have run (sc_UIApplicationMain comment).
         MSHookFunction((void *)&UIApplicationMain,
                        (void *)sc_UIApplicationMain,
                        (void **)&orig_UIApplicationMain);

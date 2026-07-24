@@ -1116,6 +1116,29 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
     int lePrevMatched = 0;
     int maxWalkLen = 0;
 
+    // Blog confirms for iOS 16.7.x (XNU 8796): p_list at +0x00, p_pid at +0x60
+    // Try leOff=0 first (blog-confirmed), then scan other offsets as fallback
+    size_t leOffOrder[1] = {0};
+    int leOffCount = 1;
+    // If pidOffsets contains 0x60, try it first
+    size_t prioritizedPidOffsets[64];
+    int prioritizedPidCount = 0;
+    if (pidOffsetCount > 0) {
+        // Put 0x60 first if present
+        for (size_t i = 0; i < pidOffsetCount && prioritizedPidCount < 64; i++) {
+            if (pidOffsets[i] == 0x60) {
+                prioritizedPidOffsets[prioritizedPidCount++] = 0x60;
+                break;
+            }
+        }
+        // Then add the rest
+        for (size_t i = 0; i < pidOffsetCount && prioritizedPidCount < 64; i++) {
+            if (pidOffsets[i] != 0x60) {
+                prioritizedPidOffsets[prioritizedPidCount++] = pidOffsets[i];
+            }
+        }
+    }
+
     for (int si = 0; si < scanCount; si++) {
         uint64_t scanAddr = scans[si].addr;
         uint64_t scanSize = scans[si].size;
@@ -1138,7 +1161,9 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
 
                 if (kread(firstProc, firstBuf, procBufSize) != 0) continue;
 
-                for (size_t leOff = 0; leOff + 16 <= maxListOff && leOff + 16 <= procBufSize; leOff += 8) {
+                // Only try leOff=0 (blog-confirmed p_list offset for iOS 16.7.x)
+                for (int loi = 0; loi < leOffCount; loi++) {
+                    size_t leOff = leOffOrder[loi];
                     uint64_t leNext1 = *(uint64_t *)(firstBuf + leOff);
                     uint64_t lePrev1 = *(uint64_t *)(firstBuf + leOff + 8);
 
@@ -1152,28 +1177,73 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     if (leNext2 != 0 && !SCKernelPtrValid(leNext2)) continue;
                     lePrevMatched++;
 
-                    // Read third proc for extra chain validation
-                    uint64_t thirdProc = leNext2;
-                    if (thirdProc == 0 || !SCKernelPtrValid(thirdProc)) continue;
-                    if (kread(thirdProc, thirdBuf, procBufSize) != 0) continue;
-                    uint64_t lePrev3 = *(uint64_t *)(thirdBuf + leOff + 8);
-                    if (lePrev3 != leNext1 + leOff) continue;
+                    // Quick PID check: verify first 2 procs have valid PIDs at offset 0x60
+                    // before walking the entire list
+                    uint32_t pid1 = *(uint32_t *)(firstBuf + 0x60);
+                    uint32_t pid2 = *(uint32_t *)(secondBuf + 0x60);
+                    if (pid1 > 65535 || pid2 > 65535) continue;
+                    if (pid1 == pid2) continue;
 
-                    // Walk the list, checking for targetPid
-                    // If pidOffsetHint is known (from proc_pid() accessor), check only that offset
-                    // Otherwise, scan ALL 4-byte offsets
+                    // Walk the list
                     uint64_t procAddr = firstProc;
                     int walkCount = 0;
-                    while (procAddr != 0 && walkCount < 2048) {
+                    while (procAddr != 0 && walkCount < 1024) {
                         if (procAddr == firstProc) {
                             memcpy(walkBuf, firstBuf, procBufSize);
                         } else if (procAddr == leNext1) {
                             memcpy(walkBuf, secondBuf, procBufSize);
-                        } else if (procAddr == thirdProc) {
-                            memcpy(walkBuf, thirdBuf, procBufSize);
                         } else {
                             if (kread(procAddr, walkBuf, procBufSize) != 0) break;
                         }
+
+                        // Check 0x60 first (blog-confirmed), then other offsets
+                        if (prioritizedPidCount > 0) {
+                            for (int pi = 0; pi < prioritizedPidCount; pi++) {
+                                size_t pidOff = prioritizedPidOffsets[pi];
+                                if (pidOff + 4 > procBufSize) continue;
+                                if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
+                                if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
+                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                                    diagnostics[@"allprocOffset"] = @(offset + i);
+                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+                                    diagnostics[@"procListOffset"] = @(leOff);
+                                    diagnostics[@"procPidOffset"] = @(pidOff);
+                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
+                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+                                    diagnostics[@"maxWalkLen"] = @(walkCount + 1);
+                                    return procAddr;
+                                }
+                            }
+                        } else {
+                            // Fallback: scan all 4-byte offsets
+                            for (size_t pidOff = 0; pidOff + 4 <= procBufSize; pidOff += 4) {
+                                if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
+                                if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
+                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                                    diagnostics[@"allprocOffset"] = @(offset + i);
+                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+                                    diagnostics[@"procListOffset"] = @(leOff);
+                                    diagnostics[@"procPidOffset"] = @(pidOff);
+                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
+                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+                                    diagnostics[@"maxWalkLen"] = @(walkCount + 1);
+                                    return procAddr;
+                                }
+                            }
+                        }
+
+                        uint64_t next = *(uint64_t *)(walkBuf + leOff);
+                        if (next == procAddr) break;
+                        procAddr = next;
+                        if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
+                        walkCount++;
+                    }
+                    if (walkCount > maxWalkLen) maxWalkLen = walkCount;
+                }
 
                         // Check candidate p_pid offsets first (from proc_pid accessor scan)
                         // then fall back to scanning ALL 4-byte offsets

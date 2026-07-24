@@ -1069,13 +1069,32 @@ static int sc_open(const char *path, int flags, ...) {
 %end
 
 // Hook getenv - hide jailbreak env vars
-// SAFE: pure C strcmp, reads atomic flag only
+//
+// CRITICAL — two-tier design:
+//
+// Tier 1 (always active, even before UIApplicationMain):
+//   DYLD_INSERT_LIBRARIES → return "" (empty string, NOT null).
+//   Security SDKs call getenv("DYLD_INSERT_LIBRARIES") in their __mod_init_func
+//   and assume it is non-NULL (they know they run in a jailbreak environment).
+//   Returning NULL causes NULL+offset → SIGSEGV in their initializer.
+//   Returning "" = "no libraries injected" — indistinguishable from stock iOS to
+//   any check of the form `if (val && strstr(val, "substrate"))`.
+//
+// Tier 2 (only when sc_c_hide_jb is active, i.e. after UIApplicationMain):
+//   All other JB env vars → return NULL (variable does not exist).
+//   These are not called during early init so NULL is safe here.
 static char *(*orig_getenv)(const char *);
 static char *sc_getenv(const char *name) {
     if (!name) return orig_getenv(name);
+
+    // Tier 1: always hide DYLD_INSERT_LIBRARIES with empty string, not NULL.
+    // This is safe at any call site: an empty string passes every
+    // `if (val != NULL)` guard but contains no suspicious dylib paths.
+    if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0) return (char *)"";
+
+    // Tier 2: hide other JB markers only after app has fully initialized.
     if (atomic_load(&sc_c_hide_jb)) {
-        if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0 ||
-            strcmp(name, "_MSSafeMode") == 0 ||
+        if (strcmp(name, "_MSSafeMode") == 0 ||
             strcmp(name, "SUBSTRATE_HOME") == 0 ||
             strcmp(name, "ELLEKIT_HOME") == 0 ||
             strcmp(name, "CFFIXED_USER_HOME") == 0 ||
@@ -1407,15 +1426,26 @@ static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_a
 // static kern_return_t (*orig_task_info)(task_name_t, task_flavor_t, task_info_t, mach_msg_type_number_t *);
 
 // ============================================================================
-//  7. NSBundle
+//  JB hook activation — MUST be deferred until after UIApplicationMain.
+//
+//  WHY: iOSSpoof.dylib's %ctor runs before app framework initializers.
+//  If sc_c_hide_jb is set in %ctor, hooks like getenv/open/stat are
+//  active during dyld's runInitializersBottomUp phase. Security SDKs
+//  (e.g. build-info.framework) call getenv("DYLD_INSERT_LIBRARIES")
+//  during their __mod_init_func and rely on a non-NULL return value.
+//  Our hook returning NULL causes NULL+0x80 dereference → SIGSEGV.
+//
+//  Solution: install hooks in %ctor (so symbols are patched) but keep
+//  sc_c_hide_jb = NO until UIApplicationMain fires — by that point all
+//  static initializers have completed and it is safe to intercept.
 // ============================================================================
-
-%hook NSBundle
-- (NSDictionary *)infoDictionary {
-    NSDictionary *d = %orig;
-    return d;
+static int (*orig_UIApplicationMain)(int, char **, NSString *, NSString *);
+static int sc_UIApplicationMain(int argc, char **argv, NSString *principalClass, NSString *delegateClass) {
+    // All dyld static initializers are done. Safe to activate JB hiding now.
+    SCUpdateCFlags();
+    atomic_store(&sc_hooks_ready, YES);
+    return orig_UIApplicationMain(argc, argv, principalClass, delegateClass);
 }
-%end
 
 // ============================================================================
 //  8. uname
@@ -1943,10 +1973,11 @@ static void SCInstallMobileGestaltHooks(void) {
                        (void *)sc_dyld_get_image_vmaddr_slide,
                        (void **)&orig_dyld_get_image_vmaddr_slide);
 
-        // Sync atomic C-flags from ObjC config now that all hooks are installed
-        // and ObjC is fully initialized. C hooks read these atomics instead of
-        // calling CFG() directly, avoiding reentrancy, deadlock, and early-fire.
-        SCUpdateCFlags();
-        atomic_store(&sc_hooks_ready, YES);
+        // IMPORTANT: do NOT call SCUpdateCFlags() here.
+        // JB hooks are installed but sc_c_hide_jb stays NO until
+        // UIApplicationMain fires — see sc_UIApplicationMain comment.
+        MSHookFunction((void *)&UIApplicationMain,
+                       (void *)sc_UIApplicationMain,
+                       (void **)&orig_UIApplicationMain);
     }
 }

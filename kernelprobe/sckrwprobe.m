@@ -7,6 +7,7 @@
 #include <mach/machine.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -852,6 +853,101 @@ static size_t *SCFindAllPidOffsets(SCKReadFunction kread, uint64_t kernelBase,
     return offsets;
 }
 
+// Resolve a kernel symbol by name by parsing __LINKEDIT symtab+strtab.
+// Returns slid symbol address, or 0 if not found.
+// This avoids allproc entirely — just read kernel Mach-O metadata.
+static uint64_t SCFindKernelSymbol(SCKReadFunction kread, uint64_t kernelBase,
+                                    const char *symbolName) {
+    struct mach_header_64 header = {0};
+    if (kread(kernelBase, &header, sizeof(header)) != 0) return 0;
+    if (header.magic != MH_MAGIC_64 || header.ncmds == 0 ||
+        header.ncmds > SCMaxLoadCommands) return 0;
+
+    uint8_t *commands = malloc(header.sizeofcmds);
+    if (!commands) return 0;
+    if (kread(kernelBase + sizeof(header), commands, header.sizeofcmds) != 0) {
+        free(commands); return 0;
+    }
+
+    int64_t slide = 0;
+    uint64_t linkeditBase = 0, linkeditVmaddr = 0;
+    uint64_t symtabOff = 0, strtabOff = 0;
+    uint32_t nsyms = 0, strsize = 0;
+
+    const uint8_t *ptr = commands;
+    NSUInteger remaining = header.sizeofcmds;
+    for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
+        const struct load_command *cmd = (const struct load_command *)ptr;
+        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
+
+        if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
+            if (SCMachNameEquals(seg->segname, "__TEXT")) {
+                slide = (int64_t)(kernelBase - seg->vmaddr);
+            } else if (SCMachNameEquals(seg->segname, "__LINKEDIT")) {
+                linkeditBase = seg->fileoff;
+                linkeditVmaddr = seg->vmaddr;
+            }
+        } else if (cmd->cmd == LC_SYMTAB && cmd->cmdsize >= sizeof(struct symtab_command)) {
+            const struct symtab_command *sym = (const struct symtab_command *)ptr;
+            symtabOff = sym->symoff;
+            strtabOff = sym->stroff;
+            nsyms = sym->nsyms;
+            strsize = sym->strsize;
+        }
+
+        ptr += cmd->cmdsize;
+        remaining -= cmd->cmdsize;
+    }
+    free(commands);
+
+    if (!linkeditBase || !linkeditVmaddr || !symtabOff || !strtabOff || !nsyms || !strsize) return 0;
+    if (nsyms > 2000000 || strsize > 64 * 1024 * 1024) return 0;
+
+    // __LINKEDIT is mapped at kernelBase + (linkeditVmaddr - textVmaddr + slide)
+    // Equivalently: kernel maps __LINKEDIT file offset => linkeditVmaddr+slide
+    uint64_t linkeditKernAddr = linkeditVmaddr + (uint64_t)slide;
+
+    // symtab and strtab offsets are file offsets; subtract linkedit fileoff to get
+    // distance from linkedit vmaddr
+    uint64_t symtabAddr = linkeditKernAddr + (symtabOff - linkeditBase);
+    uint64_t strtabAddr = linkeditKernAddr + (strtabOff - linkeditBase);
+
+    // Read strtab first (needed for name lookup)
+    char *strtab = malloc(strsize + 1);
+    if (!strtab) return 0;
+    if (kread(strtabAddr, strtab, strsize) != 0) { free(strtab); return 0; }
+    strtab[strsize] = '\0';
+
+    // Read symtab entries in chunks
+    const size_t chunkSyms = 4096;
+    const size_t entrySize = sizeof(struct nlist_64);
+    struct nlist_64 *chunk = malloc(chunkSyms * entrySize);
+    if (!chunk) { free(strtab); return 0; }
+
+    size_t nameLen = strlen(symbolName);
+    uint64_t result = 0;
+
+    for (uint32_t base = 0; base < nsyms && result == 0; base += chunkSyms) {
+        uint32_t count = nsyms - base;
+        if (count > chunkSyms) count = chunkSyms;
+        if (kread(symtabAddr + (uint64_t)base * entrySize, chunk, count * entrySize) != 0) break;
+
+        for (uint32_t j = 0; j < count && result == 0; j++) {
+            uint32_t strx = chunk[j].n_un.n_strx;
+            if (strx == 0 || strx + nameLen + 1 > strsize) continue;
+            if (strcmp(strtab + strx, symbolName) != 0) continue;
+            uint64_t value = chunk[j].n_value;
+            if (value == 0) continue;
+            result = value + (uint64_t)slide;
+        }
+    }
+
+    free(chunk);
+    free(strtab);
+    return result;
+}
+
 // Find current_proc() function address in kernel __TEXT segment.
 // On arm64, current_proc() reads TPIDR_EL1 and follows pointers.
 // We scan for the mrs instruction pattern and count matches for diagnostics.
@@ -1539,7 +1635,51 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
         result[@"offsetCache"] = @"miss";
     }
 
-    result[@"currentProcKcall"] = @"disabled-untrusted-signature";
+    // Strategy 0: use kcall(proc_find, pid) — bypasses allproc entirely.
+    // proc_find() is a public KPI, always present in XNU symtab as _proc_find.
+    // We also resolve _proc_rele to release the refcount after use.
+    SCKCallFunction kcallFunction = NULL;
+    {
+        void *kcallHandle = dlopen(NULL, RTLD_GLOBAL);
+        if (kcallHandle) {
+            // kcall may be loaded into process by libkrw
+            kcallFunction = (SCKCallFunction)dlsym(kcallHandle, "kcall");
+            dlclose(kcallHandle);
+        }
+    }
+    // Also try to load from libkrw handle directly (already done above in SCBuildReport,
+    // but SCRunVFSTest does not receive the handle — resolve via dlsym RTLD_DEFAULT)
+    if (!kcallFunction) {
+        kcallFunction = (SCKCallFunction)dlsym(RTLD_DEFAULT, "kcall");
+    }
+
+    if (kcallFunction && kernelBase) {
+        uint64_t procFindAddr = SCFindKernelSymbol(kreadFunction, kernelBase, "_proc_find");
+        uint64_t procReleAddr = SCFindKernelSymbol(kreadFunction, kernelBase, "_proc_rele");
+        result[@"procFindAddr"] = procFindAddr ? SCHexAddress(procFindAddr) : @"not-found";
+        result[@"procReleAddr"] = procReleAddr ? SCHexAddress(procReleAddr) : @"not-found";
+
+        if (procFindAddr) {
+            uint64_t kproc = kcallFunction(procFindAddr,
+                                           (uint64_t)(uint32_t)targetPid,
+                                           0, 0, 0, 0, 0, 0);
+            if (SCKernelPtrValid(kproc)) {
+                procAddr = kproc;
+                result[@"procSource"] = @"proc_find";
+                result[@"currentProcKcall"] = @"success";
+                // Release the refcount we just acquired
+                if (procReleAddr) {
+                    kcallFunction(procReleAddr, kproc, 0, 0, 0, 0, 0, 0);
+                }
+            } else {
+                result[@"currentProcKcall"] = @"proc_find-returned-invalid";
+            }
+        } else {
+            result[@"currentProcKcall"] = @"proc_find-symbol-not-found";
+        }
+    } else {
+        result[@"currentProcKcall"] = @"kcall-not-available";
+    }
 
     // Fast path: XNU 8796 has p_list at 0 and p_pid at 0x60. Patchfind
     // allproc references first, then scan data sections if code references fail.
@@ -1695,7 +1835,173 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     return result;
 }
 
-static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest) {
+// Production JB path hider via vnode VISSHADOW.
+// For each path in the JB hide list, opens the file (O_PATH|O_NOFOLLOW),
+// finds its vnode via proc→fd chain using proc_find()/kcall, then sets
+// VISSHADOW so every future access from any process gets ENOENT.
+//
+// Paths to hide:
+//   - /var/jb (symlink → actual jbroot)
+//   - /var/jb/.basebin
+//   - /usr/lib/TweakInject directory marker
+//   - Each *.roothidepatch file open in our process (unlikely at probe time)
+//   - /var/containers/Bundle/Application/*/TweakInject/*.roothidepatch globs
+//     are NOT handled here (globs need separate caller logic);
+//     the key targets are the jbroot symlink and basebin.
+static NSDictionary *SCRunHideJB(SCKBaseFunction kbaseFunction,
+                                  SCKReadFunction kreadFunction,
+                                  SCKWriteFunction kwriteFunction,
+                                  SCKCallFunction kcallFunction) {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    NSMutableArray *hiddenPaths = [NSMutableArray array];
+    NSMutableArray *failedPaths = [NSMutableArray array];
+    result[@"state"] = @"probing";
+
+    uint64_t kernelBase = 0;
+    if (kbaseFunction(&kernelBase) != 0 || !SCValidateKernelAddress(kernelBase)) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"could not get kernel base";
+        return result;
+    }
+
+    // Resolve proc_find / proc_rele from kernel symtab
+    uint64_t procFindAddr = SCFindKernelSymbol(kreadFunction, kernelBase, "_proc_find");
+    uint64_t procReleAddr = SCFindKernelSymbol(kreadFunction, kernelBase, "_proc_rele");
+    result[@"procFindAddr"] = procFindAddr ? SCHexAddress(procFindAddr) : @"not-found";
+    result[@"procReleAddr"] = procReleAddr ? SCHexAddress(procReleAddr) : @"not-found";
+
+    if (!procFindAddr) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"_proc_find not in kernel symtab";
+        return result;
+    }
+
+    if (!kcallFunction) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"kcall not available";
+        return result;
+    }
+
+    pid_t myPid = getpid();
+    uint64_t kproc = kcallFunction(procFindAddr, (uint64_t)(uint32_t)myPid, 0, 0, 0, 0, 0, 0);
+    if (!SCKernelPtrValid(kproc)) {
+        result[@"state"] = @"unsupported";
+        result[@"error"] = @"proc_find returned invalid pointer";
+        return result;
+    }
+    result[@"procAddress"] = SCHexAddress(kproc);
+
+    // Paths to VISSHADOW — ordered: symlinks last so targets are hidden first
+    NSArray<NSString *> *jbPaths = @[
+        @"/var/jb",
+        @"/var/checkra1n",
+        @"/.bootstrapped",
+    ];
+
+    // Additional roothide-specific paths discovered from jbroot symlink target
+    NSMutableArray<NSString *> *allPaths = [jbPaths mutableCopy];
+
+    // Resolve /var/jb → real path and add jbroot children
+    char realJb[PATH_MAX] = {0};
+    if (realpath("/var/jb", realJb) != NULL) {
+        NSString *jbroot = [NSString stringWithUTF8String:realJb];
+        // Always hide: jbroot/.basebin, jbroot/usr/lib/TweakInject
+        for (NSString *sub in @[@"/.basebin", @"/usr/lib/TweakInject",
+                                @"/usr/lib/TweakInject/iOSSpoof.dylib.roothidepatch",
+                                @"/var/jb/var/jb"]) {
+            [allPaths addObject:[jbroot stringByAppendingString:sub]];
+        }
+        // Also hide the real jbroot path itself (e.g. /private/preboot/.../jbroot-xxx)
+        [allPaths addObject:jbroot];
+    }
+
+    // Parse any additional paths from environment: IOSSSPOOF_HIDE_PATHS (colon-separated)
+    const char *envExtra = getenv("IOSSPOOFF_HIDE_PATHS");
+    if (envExtra) {
+        NSString *extra = [NSString stringWithUTF8String:envExtra];
+        for (NSString *p in [extra componentsSeparatedByString:@":"]) {
+            NSString *trimmed = [p stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+            if (trimmed.length > 0) [allPaths addObject:trimmed];
+        }
+    }
+
+    for (NSString *pathNS in allPaths) {
+        const char *path = pathNS.fileSystemRepresentation;
+        // O_PATH: open without read/exec permission, just for fd chain traversal
+        int fd = open(path, O_PATH | O_NOFOLLOW);
+        if (fd < 0) {
+            // Not present or no access — not a failure
+            [failedPaths addObject:@{@"path": pathNS, @"reason": @"open failed",
+                                     @"errno": @(errno)}];
+            continue;
+        }
+
+        NSMutableDictionary *diag = [NSMutableDictionary dictionary];
+        uint64_t vnodeAddr = SCFollowFdChain(kreadFunction, kproc, fd, diag);
+        close(fd);
+
+        if (!vnodeAddr) {
+            [failedPaths addObject:@{@"path": pathNS,
+                                     @"reason": diag[@"fdChainError"] ?: @"no vnode",
+                                     @"diag": diag}];
+            continue;
+        }
+
+        size_t vflagOff = [diag[@"vflagOffset"] unsignedIntegerValue];
+        uint32_t origFlags = 0;
+        if (kreadFunction(vnodeAddr + vflagOff, &origFlags, 4) != 0) {
+            [failedPaths addObject:@{@"path": pathNS, @"reason": @"kread v_flags failed"}];
+            continue;
+        }
+
+        if (origFlags & VISSHADOW) {
+            // Already hidden
+            [hiddenPaths addObject:@{@"path": pathNS, @"vnode": SCHexAddress(vnodeAddr),
+                                     @"status": @"already-hidden"}];
+            continue;
+        }
+
+        uint32_t newFlags = origFlags | VISSHADOW;
+        if (kwriteFunction(&newFlags, vnodeAddr + vflagOff, 4) != 0) {
+            [failedPaths addObject:@{@"path": pathNS, @"reason": @"kwrite v_flags failed"}];
+            continue;
+        }
+
+        // Verify write took effect
+        uint32_t verifyFlags = 0;
+        if (kreadFunction(vnodeAddr + vflagOff, &verifyFlags, 4) != 0 ||
+            !(verifyFlags & VISSHADOW)) {
+            [failedPaths addObject:@{@"path": pathNS, @"reason": @"VISSHADOW verify failed after write"}];
+            continue;
+        }
+
+        [hiddenPaths addObject:@{@"path": pathNS, @"vnode": SCHexAddress(vnodeAddr),
+                                 @"origVFlags": [NSString stringWithFormat:@"0x%08x", origFlags],
+                                 @"status": @"hidden"}];
+    }
+
+    // Release proc reference acquired by proc_find
+    if (procReleAddr) {
+        kcallFunction(procReleAddr, kproc, 0, 0, 0, 0, 0, 0);
+    }
+
+    result[@"hiddenPaths"] = hiddenPaths;
+    result[@"failedPaths"] = failedPaths;
+    result[@"hiddenCount"] = @(hiddenPaths.count);
+    result[@"failedCount"] = @(failedPaths.count);
+
+    if (hiddenPaths.count == 0 && failedPaths.count > 0) {
+        result[@"state"] = @"failed";
+        result[@"error"] = @"no paths were hidden";
+    } else if (failedPaths.count > 0) {
+        result[@"state"] = @"partial";
+    } else {
+        result[@"state"] = @"success";
+    }
+    return result;
+}
+
+static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest, BOOL shouldRunHideJB) {
     NSMutableDictionary *report = [NSMutableDictionary dictionary];
     NSISO8601DateFormatter *formatter = [NSISO8601DateFormatter new];
     report[@"schemaVersion"] = @2;
@@ -1811,6 +2117,42 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
         krw[@"vfsTest"] = @{ @"state": @"skipped", @"reason": @"missing required exports or verified kread" };
     }
 
+    BOOL canRunHideJB = shouldRunHideJB &&
+        kbaseFunction != NULL &&
+        kreadFunction != NULL &&
+        [[exports objectForKey:@"kwrite"] boolValue] &&
+        [[exports objectForKey:@"kcall"] boolValue] &&
+        [[krw[@"kernelProbe"] objectForKey:@"machOValidated"] boolValue];
+
+    if (canRunHideJB) {
+        SCKWriteFunction kwriteFunction = (SCKWriteFunction)dlsym(handle, "kwrite");
+        SCKCallFunction kcallFunction = (SCKCallFunction)dlsym(handle, "kcall");
+        if (kwriteFunction && kcallFunction) {
+            NSDictionary *hideResult = SCRunHideJB(kbaseFunction, kreadFunction,
+                                                    kwriteFunction, kcallFunction);
+            krw[@"hideJB"] = hideResult;
+
+            NSMutableDictionary *safety = [report[@"safety"] mutableCopy];
+            safety[@"artifactHidingEnabled"] = @YES;
+            safety[@"vnodeMutationCalled"] = @YES;
+            report[@"safety"] = safety;
+
+            NSString *hideState = hideResult[@"state"];
+            if ([hideState isEqualToString:@"success"] || [hideState isEqualToString:@"partial"]) {
+                report[@"transactionState"] = @"hideJBDone";
+            } else {
+                report[@"transactionState"] = @"hideJBFailed";
+            }
+        } else {
+            krw[@"hideJB"] = @{ @"state": @"skipped", @"reason": @"kwrite or kcall not available" };
+        }
+    } else {
+        NSString *skipReason = !shouldRunHideJB ? @"not requested" :
+            (![[exports objectForKey:@"kcall"] boolValue] ? @"kcall export missing" :
+             @"missing required exports or verified kread");
+        krw[@"hideJB"] = @{ @"state": @"skipped", @"reason": skipReason };
+    }
+
     krw[@"loadedImages"] = SCLoadedKRWImages();
     report[@"krw"] = krw;
     report[@"profileMatch"] = SCProfileMatchForReport(report);
@@ -1820,11 +2162,12 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
 
 static void SCPrintUsage(void) {
     fprintf(stderr,
-            "Usage: sckrwprobe [--stdout] [--cached] [--selftest] [--vfstest] [--help]\n"
+            "Usage: sckrwprobe [--stdout] [--cached] [--selftest] [--vfstest] [--hidejb] [--help]\n"
             "  --stdout     Run read-only probe and print JSON to stdout\n"
             "  --cached     Return the existing cached report without loading libkrw\n"
             "  --selftest   Run read-only probe then controlled kwrite self-test\n"
             "  --vfstest    Run read-only probe then VFS vnode test fixture\n"
+            "  --hidejb     VISSHADOW all JB paths (permanent until reboot) — requires kcall\n"
             "  --help       Show this help\n"
             "Report: %s\n",
             SCReportPath.fileSystemRepresentation);
@@ -1836,6 +2179,7 @@ int main(int argc, char *argv[]) {
         BOOL cachedOnly = NO;
         BOOL selfTest = NO;
         BOOL vfsTest = NO;
+        BOOL hideJB = NO;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--stdout") == 0) {
                 printJSON = YES;
@@ -1848,6 +2192,9 @@ int main(int argc, char *argv[]) {
             } else if (strcmp(argv[index], "--vfstest") == 0) {
                 printJSON = YES;
                 vfsTest = YES;
+            } else if (strcmp(argv[index], "--hidejb") == 0) {
+                printJSON = YES;
+                hideJB = YES;
             } else if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
                 SCPrintUsage();
                 return 0;
@@ -1878,7 +2225,7 @@ int main(int argc, char *argv[]) {
         }
 
         NSString *cachedError = nil;
-        NSDictionary *report = cachedOnly ? SCReadCachedReport(&cachedError) : SCBuildReport(selfTest, vfsTest);
+        NSDictionary *report = cachedOnly ? SCReadCachedReport(&cachedError) : SCBuildReport(selfTest, vfsTest, hideJB);
 
         if (savedStdout >= 0) {
             fflush(stdout);

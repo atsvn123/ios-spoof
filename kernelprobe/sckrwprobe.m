@@ -37,6 +37,7 @@ typedef uint64_t (*SCKCallFunction)(uint64_t func, uint64_t a1, uint64_t a2, uin
 
 static NSString * const SCProbeVersion = @"2";
 static NSString * const SCReportPath = @"/var/root/Library/Logs/iOSSpoof/sckrwprobe.json";
+static NSString * const SCOffsetCachePath = @"/var/root/Library/Logs/iOSSpoof/vfs_offsets.json";
 static const uint32_t SCMaxLoadCommands = 4096;
 static const uint32_t SCMaxLoadCommandBytes = 4 * 1024 * 1024;
 
@@ -53,6 +54,13 @@ static NSString *SCStatusString(int status) {
 
 static NSString *SCHexAddress(uint64_t address) {
     return [NSString stringWithFormat:@"0x%016llx", (unsigned long long)address];
+}
+
+static uint64_t SCParseHexAddress(NSString *str) {
+    if (!str.length) return 0;
+    const char *s = str.UTF8String;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    return strtoull(s, NULL, 16);
 }
 
 static NSString *SCUUIDString(const uuid_t uuid) {
@@ -1048,6 +1056,50 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
     return out->valid;
 }
 
+// Offset cache: stores discovered kernel struct offsets keyed by kernel UUID + boottime.
+// This allows a one-time exhaustive scan (slow) to be reused on subsequent runs.
+
+typedef struct {
+    BOOL valid;
+    uint64_t allprocOffset;    // offset from kernel base
+    size_t procListOffset;      // p_list.le_next offset in proc
+    size_t procPidOffset;       // p_pid offset in proc
+    size_t vflagOffset;         // v_flag offset in vnode
+} SCOffsetCache;
+
+static NSDictionary *SCLoadOffsetCache(NSString *kernelUUID, int64_t bootTime) {
+    if (!kernelUUID.length || bootTime <= 0) return nil;
+    NSError *error = nil;
+    NSData *data = [NSData dataWithContentsOfFile:SCOffsetCachePath options:0 error:&error];
+    if (!data) return nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![json isKindOfClass:NSDictionary.class]) return nil;
+    if (![json[@"kernelUUID"] isEqualToString:kernelUUID]) return nil;
+    if ([json[@"bootTimeSeconds"] integerValue] != bootTime) return nil;
+    return json;
+}
+
+static void SCSaveOffsetCache(NSString *kernelUUID, int64_t bootTime,
+                               uint64_t allprocOffset, size_t procListOffset,
+                               size_t procPidOffset, size_t vflagOffset) {
+    if (!kernelUUID.length || bootTime <= 0) return;
+    NSDictionary *cache = @{
+        @"kernelUUID": kernelUUID,
+        @"bootTimeSeconds": @(bootTime),
+        @"allprocOffset": [NSString stringWithFormat:@"0x%016llx", (unsigned long long)allprocOffset],
+        @"procListOffset": @(procListOffset),
+        @"procPidOffset": @(procPidOffset),
+        @"vflagOffset": @(vflagOffset)
+    };
+    NSString *dir = SCOffsetCachePath.stringByDeletingLastPathComponent;
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSData *json = [NSJSONSerialization dataWithJSONObject:cache options:NSJSONWritingPrettyPrinted error:nil];
+    if (json) {
+        [json writeToFile:SCOffsetCachePath options:NSDataWritingAtomic error:nil];
+        chmod(SCOffsetCachePath.fileSystemRepresentation, 0600);
+    }
+}
+
 static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                    SCKernelDataSections *sections,
                                    pid_t targetPid,
@@ -1430,7 +1482,8 @@ static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd
 static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
                                    SCKReadFunction kreadFunction,
                                    SCKWriteFunction kwriteFunction,
-                                   SCKCallFunction kcallFunction) {
+                                   SCKCallFunction kcallFunction,
+                                   NSString *kernelUUID) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"state"] = @"probing";
     result[@"vnodeHideVerified"] = @NO;
@@ -1494,9 +1547,57 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
     pid_t targetPid = getpid();
     result[@"targetPid"] = @(targetPid);
 
-    // Try kcall(current_proc) first — much simpler than allproc scanning
+    // Get kernel UUID and boottime for cache validation
+    int64_t bootTime = 0;
+    {
+        struct timeval bt = {0};
+        size_t btsz = sizeof(bt);
+        if (sysctlbyname("kern.boottime", &bt, &btsz, NULL, 0) == 0) bootTime = bt.tv_sec;
+    }
+
+    // Try loading cached offsets first
+    NSDictionary *cachedOffsets = SCLoadOffsetCache(kernelUUID, bootTime);
     uint64_t procAddr = 0;
-    if (kcallFunction) {
+
+    if (cachedOffsets) {
+        result[@"offsetCache"] = @"hit";
+        uint64_t allprocOffset = SCParseHexAddress(cachedOffsets[@"allprocOffset"]);
+        size_t cachedPidOff = [cachedOffsets[@"procPidOffset"] unsignedIntegerValue];
+        size_t cachedListOff = [cachedOffsets[@"procListOffset"] unsignedIntegerValue];
+
+        if (allprocOffset > 0 && cachedPidOff > 0) {
+            // Use cached allproc address directly
+            uint64_t allprocAddr = kernelBase + allprocOffset;
+            result[@"cachedAllprocAddr"] = SCHexAddress(allprocAddr);
+            result[@"cachedProcListOffset"] = @(cachedListOff);
+            result[@"cachedProcPidOffset"] = @(cachedPidOff);
+
+            // Walk allproc from cached address
+            uint8_t walkBuf[512];
+            uint64_t walkAddr = 0;
+            if (kreadFunction(allprocAddr, &walkAddr, 8) == 0 && SCKernelPtrValid(walkAddr)) {
+                while (walkAddr != 0) {
+                    if (kreadFunction(walkAddr, walkBuf, 512) != 0) break;
+                    uint32_t pid = *(uint32_t *)(walkBuf + cachedPidOff);
+                    if (pid == (uint32_t)targetPid) {
+                        procAddr = walkAddr;
+                        result[@"procSource"] = @"cache";
+                        result[@"procAddress"] = SCHexAddress(procAddr);
+                        result[@"procListOffset"] = @(cachedListOff);
+                        result[@"procPidOffset"] = @(cachedPidOff);
+                        break;
+                    }
+                    walkAddr = *(uint64_t *)(walkBuf + cachedListOff);
+                    if (walkAddr != 0 && !SCKernelPtrValid(walkAddr)) break;
+                }
+            }
+        }
+    } else {
+        result[@"offsetCache"] = @"miss";
+    }
+
+    // Try kcall(current_proc) if cache miss
+    if (procAddr == 0 && kcallFunction) {
         uint64_t textAddr = 0, textSize = 0;
         int mrsCount = 0, patternMatched = 0;
         uint64_t currentProcFunc = SCFindCurrentProcFunc(kreadFunction, kernelBase, &textAddr, &textSize, &mrsCount, &patternMatched);
@@ -1538,6 +1639,19 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
         free(pidOffsets);
         if (procAddr) {
             result[@"procSource"] = @"allproc";
+            // Save offsets to cache for future runs
+            uint64_t allprocOffset = 0;
+            if (result[@"allprocAddress"]) {
+                // allprocAddress is absolute; compute offset from kernelBase
+                uint64_t allprocAbs = SCParseHexAddress(result[@"allprocAddress"]);
+                if (allprocAbs > kernelBase) allprocOffset = allprocAbs - kernelBase;
+            }
+            size_t cachedListOff = [result[@"procListOffset"] unsignedIntegerValue];
+            size_t cachedPidOff = [result[@"procPidOffset"] unsignedIntegerValue];
+            if (allprocOffset > 0 && cachedPidOff > 0) {
+                SCSaveOffsetCache(kernelUUID, bootTime, allprocOffset, cachedListOff, cachedPidOff, 0);
+                result[@"offsetCacheSaved"] = @YES;
+            }
         }
     }
     if (procAddr == 0) {
@@ -1747,7 +1861,9 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
         SCKWriteFunction kwriteFunction = (SCKWriteFunction)dlsym(handle, "kwrite");
         if (kwriteFunction) {
             SCKCallFunction kcallFunction = (SCKCallFunction)dlsym(handle, "kcall");
-            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction, kcallFunction);
+            NSString *vfsKernelUUID = krw[@"kernelProbe"][@"kernelUUID"];
+            if (![vfsKernelUUID isKindOfClass:NSString.class]) vfsKernelUUID = @"";
+            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction, kcallFunction, vfsKernelUUID);
             krw[@"vfsTest"] = vfsTest;
 
             NSMutableDictionary *safety = [report[@"safety"] mutableCopy];

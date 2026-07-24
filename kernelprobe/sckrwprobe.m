@@ -40,6 +40,9 @@ static NSString * const SCReportPath = @"/var/root/Library/Logs/iOSSpoof/sckrwpr
 static NSString * const SCOffsetCachePath = @"/var/root/Library/Logs/iOSSpoof/vfs_offsets.json";
 static const uint32_t SCMaxLoadCommands = 4096;
 static const uint32_t SCMaxLoadCommandBytes = 4 * 1024 * 1024;
+enum { SCMaxKernelRanges = 64 };
+static const uint32_t SCMaxPid = 99999;
+static const uint32_t SCOffsetCacheVersion = 2;
 
 static NSString *SCStatusString(int status) {
     if (status == 0) return @"success";
@@ -61,6 +64,12 @@ static uint64_t SCParseHexAddress(NSString *str) {
     const char *s = str.UTF8String;
     if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
     return strtoull(s, NULL, 16);
+}
+
+static BOOL SCMachNameEquals(const char field[16], const char *expected) {
+    size_t length = strlen(expected);
+    if (length > 16 || memcmp(field, expected, length) != 0) return NO;
+    return length == 16 || field[length] == '\0';
 }
 
 static NSString *SCUUIDString(const uuid_t uuid) {
@@ -846,118 +855,11 @@ static size_t *SCFindAllPidOffsets(SCKReadFunction kread, uint64_t kernelBase,
 // Find current_proc() function address in kernel __TEXT segment.
 // On arm64, current_proc() reads TPIDR_EL1 and follows pointers.
 // We scan for the mrs instruction pattern and count matches for diagnostics.
-static uint64_t SCFindCurrentProcFunc(SCKReadFunction kread, uint64_t kernelBase,
-                                       uint64_t *textAddr, uint64_t *textSize,
-                                       int *mrsCount, int *patternMatched) {
-    struct mach_header_64 header = {0};
-    if (kread(kernelBase, &header, sizeof(header)) != 0) return 0;
-    if (header.magic != MH_MAGIC_64 || header.ncmds == 0 || header.ncmds > SCMaxLoadCommands) return 0;
-
-    uint8_t *commands = malloc(header.sizeofcmds);
-    if (!commands) return 0;
-    if (kread(kernelBase + sizeof(header), commands, header.sizeofcmds) != 0) {
-        free(commands);
-        return 0;
-    }
-
-    // Find __TEXT segment
-    uint64_t textVmaddr = 0, textVmsize = 0;
-    // Also find __TEXT_EXEC segment (iOS kernel may put executable code here)
-    uint64_t textExecVmaddr = 0, textExecVmsize = 0;
-    const uint8_t *ptr = commands;
-    NSUInteger remaining = header.sizeofcmds;
-    for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
-        const struct load_command *cmd = (const struct load_command *)ptr;
-        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
-        if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
-            const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
-            if (strcmp(seg->segname, "__TEXT") == 0) {
-                textVmaddr = seg->vmaddr;
-                textVmsize = seg->vmsize;
-            } else if (strcmp(seg->segname, "__TEXT_EXEC") == 0) {
-                textExecVmaddr = seg->vmaddr;
-                textExecVmsize = seg->vmsize;
-            }
-        }
-        ptr += cmd->cmdsize;
-        remaining -= cmd->cmdsize;
-    }
-    free(commands);
-    if (textVmaddr == 0 && textExecVmaddr == 0) return 0;
-
-    int64_t slide = (int64_t)(kernelBase - textVmaddr);
-
-    // Scan both __TEXT and __TEXT_EXEC segments
-    struct { uint64_t base; uint64_t size; const char *name; } segs[2];
-    int segCount = 0;
-    if (textVmsize > 0) {
-        segs[segCount].base = textVmaddr + slide;
-        segs[segCount].size = textVmsize;
-        segs[segCount].name = "__TEXT";
-        segCount++;
-    }
-    if (textExecVmsize > 0) {
-        // __TEXT_EXEC may have its own vmaddr, compute slide relative to __TEXT
-        segs[segCount].base = textExecVmaddr + slide;
-        segs[segCount].size = textExecVmsize;
-        segs[segCount].name = "__TEXT_EXEC";
-        segCount++;
-    }
-
-    if (mrsCount) *mrsCount = 0;
-    if (patternMatched) *patternMatched = 0;
-
-    const size_t scanChunk = 8192;
-    uint8_t *chunk = malloc(scanChunk);
-    if (!chunk) return 0;
-
-    for (int si = 0; si < segCount; si++) {
-        uint64_t scanBase = segs[si].base;
-        uint64_t scanEnd = segs[si].size;
-        if (scanEnd > 32 * 1024 * 1024) scanEnd = 32 * 1024 * 1024;
-
-        for (uint64_t off = 0; off < scanEnd; off += scanChunk - 64) {
-            size_t readSize = scanChunk;
-            if (off + readSize > scanEnd) readSize = (size_t)(scanEnd - off);
-            if (readSize < 64) break;
-
-            if (kread(scanBase + off, chunk, readSize) != 0) continue;
-
-            for (size_t i = 0; i + 64 <= readSize; i += 4) {
-                uint32_t insn = *(uint32_t *)(chunk + i);
-
-                // Check for mrs xN, TPIDR_EL1 (0xD538D080 | Rt, mask 0xFFFFFFE0)
-                // Also check TPIDR_EL0 (0xD538D040 | Rt) and TPIDRRO_EL0 (0xD538C040 | Rt)
-                BOOL isTPIDR_EL1 = (insn & 0xFFFFFFE0) == 0xD538D080;
-                BOOL isTPIDR_EL0 = (insn & 0xFFFFFFE0) == 0xD538D040;
-                BOOL isTPIDRRO_EL0 = (insn & 0xFFFFFFE0) == 0xD538C040;
-                if (!isTPIDR_EL1 && !isTPIDR_EL0 && !isTPIDRRO_EL0) continue;
-                if (mrsCount) (*mrsCount)++;
-
-                // Look for ret within next 60 bytes (15 instructions)
-                // Allow ldr, mov, b, bl, stp, ldp instructions
-                BOOL hasRet = NO;
-                int ldrCount = 0;
-                for (size_t j = 4; j <= 60; j += 4) {
-                    uint32_t next = *(uint32_t *)(chunk + i + j);
-                    if (next == 0xd65f03c0) { hasRet = YES; break; }
-                    if ((next & 0xFFC00000) == 0xF9400000) ldrCount++; // ldr xN, [xM, #imm]
-                }
-                if (!hasRet) continue;
-                if (ldrCount < 2) continue;
-                if (patternMatched) (*patternMatched)++;
-
-                free(chunk);
-                if (textAddr) *textAddr = scanBase;
-                if (textSize) *textSize = segs[si].size;
-                return scanBase + off + i;
-            }
-        }
-    }
-
-    free(chunk);
-    return 0;
-}
+typedef struct {
+    uint64_t addr;
+    uint64_t size;
+    char name[17];
+} SCKernelRange;
 
 typedef struct {
     BOOL valid;
@@ -971,7 +873,25 @@ typedef struct {
     uint64_t segmentSize;
     uint64_t dataConstAddr;
     uint64_t dataConstSize;
+    SCKernelRange dataRanges[SCMaxKernelRanges];
+    uint32_t dataRangeCount;
+    SCKernelRange textRanges[SCMaxKernelRanges];
+    uint32_t textRangeCount;
 } SCKernelDataSections;
+
+static BOOL SCAddKernelRange(SCKernelRange *ranges, uint32_t *count,
+                             uint64_t addr, uint64_t size, const char name[16]) {
+    if (addr == 0 || size == 0 || *count >= SCMaxKernelRanges || addr > UINT64_MAX - size) return NO;
+    for (uint32_t i = 0; i < *count; i++) {
+        if (ranges[i].addr == addr && ranges[i].size == size) return YES;
+    }
+    SCKernelRange *range = &ranges[(*count)++];
+    range->addr = addr;
+    range->size = size;
+    memcpy(range->name, name, 16);
+    range->name[16] = '\0';
+    return YES;
+}
 
 static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
                                  SCKernelDataSections *out) {
@@ -997,10 +917,14 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
     NSUInteger remaining = header.sizeofcmds;
     for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
         const struct load_command *cmd = (const struct load_command *)ptr;
-        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
+        if (cmd->cmdsize < sizeof(struct load_command) ||
+            (cmd->cmdsize % 8) != 0 || cmd->cmdsize > remaining) {
+            free(commands);
+            return NO;
+        }
         if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
             const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
-            if (strcmp(seg->segname, "__TEXT") == 0) {
+            if (SCMachNameEquals(seg->segname, "__TEXT")) {
                 textVmaddr = seg->vmaddr;
                 foundText = YES;
                 break;
@@ -1017,11 +941,24 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
     remaining = header.sizeofcmds;
     for (uint32_t i = 0; i < header.ncmds && remaining >= sizeof(struct load_command); i++) {
         const struct load_command *cmd = (const struct load_command *)ptr;
-        if (cmd->cmdsize < sizeof(struct load_command) || cmd->cmdsize > remaining) break;
+        if (cmd->cmdsize < sizeof(struct load_command) ||
+            (cmd->cmdsize % 8) != 0 || cmd->cmdsize > remaining) {
+            free(commands);
+            return NO;
+        }
         if (cmd->cmd == LC_SEGMENT_64 && cmd->cmdsize >= sizeof(struct segment_command_64)) {
             const struct segment_command_64 *seg = (const struct segment_command_64 *)ptr;
+            BOOL isText = SCMachNameEquals(seg->segname, "__TEXT") ||
+                SCMachNameEquals(seg->segname, "__TEXT_EXEC");
+            BOOL isData = SCMachNameEquals(seg->segname, "__DATA") ||
+                SCMachNameEquals(seg->segname, "__DATA_CONST") ||
+                SCMachNameEquals(seg->segname, "__DATA_DIRTY");
 
-            if (strcmp(seg->segname, "__DATA") == 0) {
+            if (isText) {
+                SCAddKernelRange(out->textRanges, &out->textRangeCount,
+                                 seg->vmaddr + slide, seg->vmsize, seg->segname);
+            }
+            if (SCMachNameEquals(seg->segname, "__DATA")) {
                 out->segmentAddr = seg->vmaddr + slide;
                 out->segmentSize = seg->vmsize;
                 if (seg->nsects > 0) {
@@ -1029,22 +966,38 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
                     size_t sectionArraySize = (size_t)seg->nsects * sizeof(struct section_64);
                     if (sectionArraySize <= cmd->cmdsize - sizeof(struct segment_command_64)) {
                         for (uint32_t j = 0; j < seg->nsects; j++) {
-                            if (strcmp(sect[j].sectname, "__common") == 0) {
+                            if (SCMachNameEquals(sect[j].sectname, "__common")) {
                                 out->commonAddr = sect[j].addr + slide;
                                 out->commonSize = sect[j].size;
-                            } else if (strcmp(sect[j].sectname, "__bss") == 0) {
+                            } else if (SCMachNameEquals(sect[j].sectname, "__bss")) {
                                 out->bssAddr = sect[j].addr + slide;
                                 out->bssSize = sect[j].size;
-                            } else if (strcmp(sect[j].sectname, "__data") == 0) {
+                            } else if (SCMachNameEquals(sect[j].sectname, "__data")) {
                                 out->dataAddr = sect[j].addr + slide;
                                 out->dataSize = sect[j].size;
                             }
                         }
                     }
                 }
-            } else if (strcmp(seg->segname, "__DATA_CONST") == 0) {
+            } else if (SCMachNameEquals(seg->segname, "__DATA_CONST")) {
                 out->dataConstAddr = seg->vmaddr + slide;
                 out->dataConstSize = seg->vmsize;
+            }
+
+            if (isData && seg->nsects > 0) {
+                const struct section_64 *sect = (const struct section_64 *)(ptr + sizeof(struct segment_command_64));
+                size_t sectionArraySize = (size_t)seg->nsects * sizeof(struct section_64);
+                if (sectionArraySize > cmd->cmdsize - sizeof(struct segment_command_64)) {
+                    free(commands);
+                    return NO;
+                }
+                for (uint32_t j = 0; j < seg->nsects; j++) {
+                    SCAddKernelRange(out->dataRanges, &out->dataRangeCount,
+                                     sect[j].addr + slide, sect[j].size, sect[j].sectname);
+                }
+            } else if (isData) {
+                SCAddKernelRange(out->dataRanges, &out->dataRangeCount,
+                                 seg->vmaddr + slide, seg->vmsize, seg->segname);
             }
         }
         ptr += cmd->cmdsize;
@@ -1052,11 +1005,11 @@ static BOOL SCParseDataSections(SCKReadFunction kread, uint64_t kernelBase,
     }
 
     free(commands);
-    out->valid = (out->segmentSize > 0 || out->commonSize > 0 || out->bssSize > 0 || out->dataSize > 0);
+    out->valid = out->dataRangeCount > 0 && out->textRangeCount > 0;
     return out->valid;
 }
 
-// Offset cache: stores discovered kernel struct offsets keyed by kernel UUID + boottime.
+// Offset cache: stores offsets relative to kernel base, keyed by kernel UUID.
 // This allows a one-time exhaustive scan (slow) to be reused on subsequent runs.
 
 typedef struct {
@@ -1068,14 +1021,24 @@ typedef struct {
 } SCOffsetCache;
 
 static NSDictionary *SCLoadOffsetCache(NSString *kernelUUID, int64_t bootTime) {
-    if (!kernelUUID.length || bootTime <= 0) return nil;
+    if (!kernelUUID.length) return nil;
+    struct stat info = {0};
+    if (lstat(SCOffsetCachePath.fileSystemRepresentation, &info) != 0 ||
+        !S_ISREG(info.st_mode) || info.st_uid != 0 ||
+        (info.st_mode & (S_IWGRP | S_IWOTH)) != 0 || info.st_size <= 0 ||
+        info.st_size > 64 * 1024) return nil;
     NSError *error = nil;
     NSData *data = [NSData dataWithContentsOfFile:SCOffsetCachePath options:0 error:&error];
     if (!data) return nil;
     id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![json isKindOfClass:NSDictionary.class]) return nil;
+    if (![json[@"cacheVersion"] isKindOfClass:NSNumber.class] ||
+        [json[@"cacheVersion"] unsignedIntValue] != SCOffsetCacheVersion) return nil;
+    if (![json[@"kernelUUID"] isKindOfClass:NSString.class]) return nil;
     if (![json[@"kernelUUID"] isEqualToString:kernelUUID]) return nil;
-    if ([json[@"bootTimeSeconds"] integerValue] != bootTime) return nil;
+    if (![json[@"allprocOffset"] isKindOfClass:NSString.class] ||
+        ![json[@"procListOffset"] isKindOfClass:NSNumber.class] ||
+        ![json[@"procPidOffset"] isKindOfClass:NSNumber.class]) return nil;
     return json;
 }
 
@@ -1084,6 +1047,7 @@ static void SCSaveOffsetCache(NSString *kernelUUID, int64_t bootTime,
                                size_t procPidOffset, size_t vflagOffset) {
     if (!kernelUUID.length || bootTime <= 0) return;
     NSDictionary *cache = @{
+        @"cacheVersion": @(SCOffsetCacheVersion),
         @"kernelUUID": kernelUUID,
         @"bootTimeSeconds": @(bootTime),
         @"allprocOffset": [NSString stringWithFormat:@"0x%016llx", (unsigned long long)allprocOffset],
@@ -1100,149 +1064,222 @@ static void SCSaveOffsetCache(NSString *kernelUUID, int64_t bootTime,
     }
 }
 
+static BOOL SCRangeContainsAddress(const SCKernelRange *ranges, uint32_t count,
+                                    uint64_t address, size_t length) {
+    if (length == 0 || address > UINT64_MAX - length) return NO;
+    uint64_t end = address + length;
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t rangeEnd = ranges[i].addr + ranges[i].size;
+        if (address >= ranges[i].addr && end <= rangeEnd) return YES;
+    }
+    return NO;
+}
+
+static size_t SCBuildPidOffsetOrder(const size_t *pidOffsets, size_t pidOffsetCount,
+                                    size_t ordered[64]) {
+    size_t count = 0;
+    ordered[count++] = 0x60;
+    for (size_t i = 0; i < pidOffsetCount && count < 64; i++) {
+        size_t candidate = pidOffsets[i];
+        if ((candidate % 4) != 0 || candidate > 0x200 || candidate == 0x60) continue;
+        BOOL duplicate = NO;
+        for (size_t j = 0; j < count; j++) {
+            if (ordered[j] == candidate) { duplicate = YES; break; }
+        }
+        if (!duplicate) ordered[count++] = candidate;
+    }
+    return count;
+}
+
+static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allprocAddr,
+                                            pid_t targetPid, const size_t *pidOffsets,
+                                            size_t pidOffsetCount,
+                                            NSMutableDictionary *diagnostics) {
+    const size_t procReadSize = 0x208;
+    size_t ordered[64];
+    size_t orderedCount = SCBuildPidOffsetOrder(pidOffsets, pidOffsetCount, ordered);
+    uint8_t first[0x208] = {0};
+    uint8_t second[0x208] = {0};
+    uint8_t third[0x208] = {0};
+    uint8_t walk[0x208] = {0};
+    uint64_t firstProc = 0;
+    uint64_t firstLinks[2] = {0};
+    uint64_t secondLinks[2] = {0};
+    uint64_t thirdLinks[2] = {0};
+
+    if (kread(allprocAddr, &firstProc, sizeof(firstProc)) != 0 || !SCKernelPtrValid(firstProc)) return 0;
+    if (kread(firstProc, firstLinks, sizeof(firstLinks)) != 0) return 0;
+    uint64_t next1 = firstLinks[0];
+    if (!SCKernelPtrValid(next1)) return 0;
+
+    if (kread(next1, secondLinks, sizeof(secondLinks)) != 0) return 0;
+    uint64_t next2 = secondLinks[0];
+    if (!SCKernelPtrValid(next2)) return 0;
+
+    if (kread(next2, thirdLinks, sizeof(thirdLinks)) != 0) return 0;
+
+    if (kread(firstProc, first, procReadSize) != 0 ||
+        kread(next1, second, procReadSize) != 0 ||
+        kread(next2, third, procReadSize) != 0) return 0;
+    // Verify forward links are self-consistent (le_next only — le_prev varies by kernel build)
+    if (*(uint64_t *)(first + 0x00) != next1 ||
+        *(uint64_t *)(second + 0x00) != next2) return 0;
+
+    size_t validatedPidOff = SIZE_MAX;
+    for (size_t i = 0; i < orderedCount; i++) {
+        size_t pidOff = ordered[i];
+        uint32_t pid1 = *(uint32_t *)(first + pidOff);
+        uint32_t pid2 = *(uint32_t *)(second + pidOff);
+        uint32_t pid3 = *(uint32_t *)(third + pidOff);
+        if (pid1 <= SCMaxPid && pid2 <= SCMaxPid && pid3 <= SCMaxPid &&
+            pid1 != pid2 && pid1 != pid3 && pid2 != pid3) {
+            validatedPidOff = pidOff;
+            break;
+        }
+    }
+    if (validatedPidOff == SIZE_MAX) return 0;
+
+    uint64_t procAddr = firstProc;
+    int walkCount = 0;
+    while (procAddr != 0 && walkCount < 4096) {
+        if (procAddr == firstProc) memcpy(walk, first, procReadSize);
+        else if (procAddr == next1) memcpy(walk, second, procReadSize);
+        else if (procAddr == next2) memcpy(walk, third, procReadSize);
+        else if (kread(procAddr, walk, procReadSize) != 0) break;
+
+        uint64_t next = *(uint64_t *)(walk + 0x00);
+        uint32_t pid = *(uint32_t *)(walk + validatedPidOff);
+        if (pid > SCMaxPid) break;
+        walkCount++;
+        if (pid == (uint32_t)targetPid) {
+            diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+            diagnostics[@"procListOffset"] = @0;
+            diagnostics[@"procPidOffset"] = @(validatedPidOff);
+            diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+            diagnostics[@"pidValidated"] = @YES;
+            diagnostics[@"maxWalkLen"] = @(walkCount);
+            return procAddr;
+        }
+        if (next == 0 || next == procAddr || !SCKernelPtrValid(next)) break;
+        procAddr = next;
+    }
+    if (walkCount > [diagnostics[@"maxWalkLen"] intValue]) diagnostics[@"maxWalkLen"] = @(walkCount);
+    return 0;
+}
+
+static BOOL SCDecodeADRP(uint32_t instruction, uint64_t pc, uint8_t *rd, uint64_t *page) {
+    if ((instruction & 0x9F000000U) != 0x90000000U) return NO;
+    uint64_t imm21 = ((uint64_t)((instruction >> 5) & 0x7FFFF) << 2) |
+        ((instruction >> 29) & 0x3);
+    int64_t signedImm = ((int64_t)(imm21 << 43)) >> 43;
+    int64_t delta = signedImm << 12;
+    *rd = instruction & 0x1F;
+    *page = (uint64_t)((int64_t)(pc & ~0xFFFULL) + delta);
+    return YES;
+}
+
+static uint64_t SCPatchfindAllproc(SCKReadFunction kread,
+                                    const SCKernelDataSections *sections,
+                                    pid_t targetPid, NSMutableDictionary *diagnostics,
+                                    const size_t *pidOffsets, size_t pidOffsetCount) {
+    const size_t chunkSize = 16384;
+    uint8_t *chunk = malloc(chunkSize);
+    if (!chunk) return 0;
+    NSMutableSet<NSNumber *> *seenGlobals = [NSMutableSet set];
+    int references = 0;
+    int candidates = 0;
+
+    for (uint32_t ri = 0; ri < sections->textRangeCount; ri++) {
+        const SCKernelRange *range = &sections->textRanges[ri];
+        for (uint64_t offset = 0; offset < range->size; offset += chunkSize - 32) {
+            size_t readSize = chunkSize;
+            if (offset + readSize > range->size) readSize = (size_t)(range->size - offset);
+            if (readSize < 8 || kread(range->addr + offset, chunk, readSize) != 0) continue;
+
+            for (size_t i = 0; i + 20 <= readSize; i += 4) {
+                uint8_t adrpReg = 0;
+                uint64_t page = 0;
+                if (!SCDecodeADRP(*(uint32_t *)(chunk + i), range->addr + offset + i,
+                                  &adrpReg, &page)) continue;
+                for (size_t j = 4; j <= 16; j += 4) {
+                    uint32_t instruction = *(uint32_t *)(chunk + i + j);
+                    if ((instruction & 0xFFC00000U) != 0xF9400000U) continue;
+                    if (((instruction >> 5) & 0x1F) != adrpReg) continue;
+                    uint64_t globalAddr = page + (uint64_t)((instruction >> 10) & 0xFFF) * 8;
+                    if (!SCRangeContainsAddress(sections->dataRanges, sections->dataRangeCount,
+                                                globalAddr, sizeof(uint64_t))) continue;
+                    references++;
+                    NSNumber *key = @(globalAddr);
+                    if ([seenGlobals containsObject:key]) continue;
+                    [seenGlobals addObject:key];
+                    candidates++;
+                    uint64_t proc = SCValidateAllprocCandidate(kread, globalAddr, targetPid,
+                                                               pidOffsets, pidOffsetCount,
+                                                               diagnostics);
+                    if (proc) {
+                        diagnostics[@"allprocDiscovery"] = @"adrp-ldr";
+                        diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:range->name];
+                        diagnostics[@"patchfindReferences"] = @(references);
+                        diagnostics[@"patchfindCandidates"] = @(candidates);
+                        free(chunk);
+                        return proc;
+                    }
+                }
+            }
+        }
+    }
+    diagnostics[@"patchfindReferences"] = @(references);
+    diagnostics[@"patchfindCandidates"] = @(candidates);
+    free(chunk);
+    return 0;
+}
+
 static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                    SCKernelDataSections *sections,
                                    pid_t targetPid,
                                    NSMutableDictionary *diagnostics,
                                    const size_t *pidOffsets, size_t pidOffsetCount) {
-    // Find allproc by scanning __DATA for a pointer to a proc linked list.
-    // Blog confirms for iOS 16.7.x (XNU 8796): p_list.le_next at +0x00, p_pid at +0x60.
-    //
-    // Strategy: for each kernel pointer in __DATA, treat it as allproc.lh_first,
-    // read the first proc, check PID at 0x60 is valid (0-65535), follow le_next
-    // at offset 0, check second proc PID is valid and different. If both pass,
-    // walk the full list looking for our PID. No le_prev validation needed.
+    uint64_t proc = SCPatchfindAllproc(kread, sections, targetPid, diagnostics,
+                                      pidOffsets, pidOffsetCount);
+    if (proc) return proc;
 
-    const size_t chunkSize = 8192;
-    const size_t procBufSize = 512;
-    const size_t pidOff = 0x60;  // blog-confirmed p_pid offset
-
+    const size_t chunkSize = 65536;
     uint8_t *chunk = malloc(chunkSize);
-    uint8_t *firstBuf = malloc(procBufSize);
-    uint8_t *walkBuf = malloc(procBufSize);
-    if (!chunk || !firstBuf || !walkBuf) {
-        free(chunk); free(firstBuf); free(walkBuf);
-        return 0;
-    }
+    if (!chunk) return 0;
+    int pointerCandidates = 0;
+    uint64_t bytesScanned = 0;
 
-    struct { uint64_t addr; uint64_t size; const char *name; } scans[5];
-    int scanCount = 0;
-    if (sections->segmentSize > 0) {
-        scans[scanCount].addr = sections->segmentAddr;
-        scans[scanCount].size = sections->segmentSize;
-        scans[scanCount].name = "__DATA";
-        scanCount++;
-    }
-    if (sections->dataConstSize > 0) {
-        scans[scanCount].addr = sections->dataConstAddr;
-        scans[scanCount].size = sections->dataConstSize;
-        scans[scanCount].name = "__DATA_CONST";
-        scanCount++;
-    }
-    if (sections->commonSize > 0) {
-        scans[scanCount].addr = sections->commonAddr;
-        scans[scanCount].size = sections->commonSize;
-        scans[scanCount].name = "__common";
-        scanCount++;
-    }
-    if (sections->bssSize > 0) {
-        scans[scanCount].addr = sections->bssAddr;
-        scans[scanCount].size = sections->bssSize;
-        scans[scanCount].name = "__bss";
-        scanCount++;
-    }
-    if (sections->dataSize > 0) {
-        scans[scanCount].addr = sections->dataAddr;
-        scans[scanCount].size = sections->dataSize;
-        scans[scanCount].name = "__data";
-        scanCount++;
-    }
-
-    int totalCandidates = 0;
-    int pidValidated = 0;
-    int maxWalkLen = 0;
-
-    for (int si = 0; si < scanCount; si++) {
-        uint64_t scanAddr = scans[si].addr;
-        uint64_t scanSize = scans[si].size;
-        if (scanAddr == 0 || scanSize == 0) continue;
-        if (scanSize > 8 * 1024 * 1024) scanSize = 8 * 1024 * 1024;
-
-        for (uint64_t offset = 0; offset < scanSize; offset += chunkSize - 8) {
+    for (uint32_t ri = 0; ri < sections->dataRangeCount; ri++) {
+        const SCKernelRange *range = &sections->dataRanges[ri];
+        for (uint64_t offset = 0; offset < range->size; offset += chunkSize - 8) {
             size_t readSize = chunkSize;
-            if (offset + readSize > scanSize) readSize = (size_t)(scanSize - offset);
-            if (readSize < 16) break;
-
-            if (kread(scanAddr + offset, chunk, readSize) != 0) continue;
-
+            if (offset + readSize > range->size) readSize = (size_t)(range->size - offset);
+            if (readSize < 8 || kread(range->addr + offset, chunk, readSize) != 0) continue;
+            bytesScanned += readSize;
             for (size_t i = 0; i + 8 <= readSize; i += 8) {
                 uint64_t firstProc = *(uint64_t *)(chunk + i);
                 if (!SCKernelPtrValid(firstProc)) continue;
-                totalCandidates++;
-
-                // Read first proc
-                if (kread(firstProc, firstBuf, procBufSize) != 0) continue;
-
-                // Check PID at 0x60 (blog-confirmed)
-                uint32_t pid1 = *(uint32_t *)(firstBuf + pidOff);
-                if (pid1 > 65535) continue;
-
-                // Follow le_next at offset 0
-                uint64_t leNext1 = *(uint64_t *)(firstBuf + 0);
-                if (leNext1 == 0 || !SCKernelPtrValid(leNext1)) continue;
-
-                // Read second proc, check PID is valid and different
-                if (kread(leNext1, walkBuf, procBufSize) != 0) continue;
-                uint32_t pid2 = *(uint32_t *)(walkBuf + pidOff);
-                if (pid2 > 65535 || pid2 == pid1) continue;
-
-                // Follow le_next again for third proc
-                uint64_t leNext2 = *(uint64_t *)(walkBuf + 0);
-                if (leNext2 == 0 || !SCKernelPtrValid(leNext2)) continue;
-                if (kread(leNext2, walkBuf, procBufSize) != 0) continue;
-                uint32_t pid3 = *(uint32_t *)(walkBuf + pidOff);
-                if (pid3 > 65535 || pid3 == pid1 || pid3 == pid2) continue;
-                pidValidated++;
-
-                // Walk the list looking for our PID
-                uint64_t procAddr = firstProc;
-                int walkCount = 0;
-                while (procAddr != 0 && walkCount < 4096) {
-                    if (procAddr == firstProc) {
-                        memcpy(walkBuf, firstBuf, procBufSize);
-                    } else {
-                        if (kread(procAddr, walkBuf, procBufSize) != 0) break;
-                    }
-
-                    if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
-                        free(chunk); free(firstBuf); free(walkBuf);
-                        diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                        diagnostics[@"allprocOffset"] = @(offset + i);
-                        diagnostics[@"allprocAddress"] = SCHexAddress(scanAddr + offset + i);
-                        diagnostics[@"procListOffset"] = @0;
-                        diagnostics[@"procPidOffset"] = @(pidOff);
-                        diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                        diagnostics[@"scanCandidates"] = @(totalCandidates);
-                        diagnostics[@"pidValidated"] = @(pidValidated);
-                        diagnostics[@"maxWalkLen"] = @(walkCount + 1);
-                        return procAddr;
-                    }
-
-                    uint64_t next = *(uint64_t *)(walkBuf + 0);
-                    if (next == procAddr) break;
-                    procAddr = next;
-                    if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
-                    walkCount++;
+                pointerCandidates++;
+                uint64_t allprocAddr = range->addr + offset + i;
+                proc = SCValidateAllprocCandidate(kread, allprocAddr, targetPid,
+                                                  pidOffsets, pidOffsetCount,
+                                                  diagnostics);
+                if (proc) {
+                    diagnostics[@"allprocDiscovery"] = @"data-scan";
+                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:range->name];
+                    diagnostics[@"allprocOffset"] = @(offset + i);
+                    diagnostics[@"scanCandidates"] = @(pointerCandidates);
+                    diagnostics[@"dataBytesScanned"] = @(bytesScanned);
+                    free(chunk);
+                    return proc;
                 }
-                if (walkCount > maxWalkLen) maxWalkLen = walkCount;
             }
         }
     }
 
-    free(chunk); free(firstBuf); free(walkBuf);
-    diagnostics[@"scanCandidates"] = @(totalCandidates);
-    diagnostics[@"pidValidated"] = @(pidValidated);
-    diagnostics[@"maxWalkLen"] = @(maxWalkLen);
+    diagnostics[@"scanCandidates"] = @(pointerCandidates);
+    diagnostics[@"dataBytesScanned"] = @(bytesScanned);
+    free(chunk);
     return 0;
 }
 
@@ -1371,7 +1408,6 @@ static uint64_t SCFollowFdChain(SCKReadFunction kread, uint64_t procAddr, int fd
 static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
                                    SCKReadFunction kreadFunction,
                                    SCKWriteFunction kwriteFunction,
-                                   SCKCallFunction kcallFunction,
                                    NSString *kernelUUID) {
     NSMutableDictionary *result = [NSMutableDictionary dictionary];
     result[@"state"] = @"probing";
@@ -1454,67 +1490,35 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
         size_t cachedPidOff = [cachedOffsets[@"procPidOffset"] unsignedIntegerValue];
         size_t cachedListOff = [cachedOffsets[@"procListOffset"] unsignedIntegerValue];
 
-        if (allprocOffset > 0 && cachedPidOff > 0) {
-            // Use cached allproc address directly
+        if (allprocOffset > 0 && allprocOffset <= UINT64_MAX - kernelBase &&
+            cachedListOff == 0 && cachedPidOff > 0 && cachedPidOff <= 0x200 &&
+            (cachedPidOff % 4) == 0) {
             uint64_t allprocAddr = kernelBase + allprocOffset;
             result[@"cachedAllprocAddr"] = SCHexAddress(allprocAddr);
             result[@"cachedProcListOffset"] = @(cachedListOff);
             result[@"cachedProcPidOffset"] = @(cachedPidOff);
-
-            // Walk allproc from cached address
-            uint8_t walkBuf[512];
-            uint64_t walkAddr = 0;
-            if (kreadFunction(allprocAddr, &walkAddr, 8) == 0 && SCKernelPtrValid(walkAddr)) {
-                while (walkAddr != 0) {
-                    if (kreadFunction(walkAddr, walkBuf, 512) != 0) break;
-                    uint32_t pid = *(uint32_t *)(walkBuf + cachedPidOff);
-                    if (pid == (uint32_t)targetPid) {
-                        procAddr = walkAddr;
-                        result[@"procSource"] = @"cache";
-                        result[@"procAddress"] = SCHexAddress(procAddr);
-                        result[@"procListOffset"] = @(cachedListOff);
-                        result[@"procPidOffset"] = @(cachedPidOff);
-                        break;
-                    }
-                    walkAddr = *(uint64_t *)(walkBuf + cachedListOff);
-                    if (walkAddr != 0 && !SCKernelPtrValid(walkAddr)) break;
-                }
-            }
+            procAddr = SCValidateAllprocCandidate(kreadFunction, allprocAddr, targetPid,
+                                                  &cachedPidOff, 1, result);
+            if (procAddr) result[@"procSource"] = @"cache";
+            else result[@"offsetCache"] = @"rejected";
+        } else {
+            result[@"offsetCache"] = @"rejected";
         }
     } else {
         result[@"offsetCache"] = @"miss";
     }
 
-    // Try kcall(current_proc) if cache miss
-    if (procAddr == 0 && kcallFunction) {
-        uint64_t textAddr = 0, textSize = 0;
-        int mrsCount = 0, patternMatched = 0;
-        uint64_t currentProcFunc = SCFindCurrentProcFunc(kreadFunction, kernelBase, &textAddr, &textSize, &mrsCount, &patternMatched);
-        result[@"currentProcFuncAddr"] = currentProcFunc ? SCHexAddress(currentProcFunc) : @"0x0";
-        result[@"mrsCount"] = @(mrsCount);
-        result[@"patternMatched"] = @(patternMatched);
-        if (textSize > 0) {
-            result[@"textSegmentSize"] = @(textSize);
-            result[@"textSegmentAddr"] = SCHexAddress(textAddr);
-        }
-        if (currentProcFunc) {
-            uint64_t callResult = kcallFunction(currentProcFunc, 0, 0, 0, 0, 0, 0, 0);
-            result[@"kcallCurrentProc"] = SCHexAddress(callResult);
-            if (SCKernelPtrValid(callResult)) {
-                // Verify: read 16 bytes at procAddr, check it looks like a proc
-                uint8_t procData[16];
-                if (kreadFunction(callResult, procData, 16) == 0) {
-                    procAddr = callResult;
-                    result[@"procSource"] = @"kcall";
-                    result[@"procAddress"] = SCHexAddress(procAddr);
-                }
-            }
-        }
+    result[@"currentProcKcall"] = @"disabled-untrusted-signature";
+
+    // Fast path: XNU 8796 has p_list at 0 and p_pid at 0x60. Patchfind
+    // allproc references first, then scan data sections if code references fail.
+    if (procAddr == 0) {
+        procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result, NULL, 0);
     }
 
-    // Fallback: allproc scanning
+    // Generic fallback: collect accessor-shaped offsets only if the exact
+    // profile offset did not validate.
     if (procAddr == 0) {
-        // Find all candidate p_pid offsets from proc_pid() accessor pattern
         size_t pidOffsetCount = 0;
         size_t *pidOffsets = SCFindAllPidOffsets(kreadFunction, kernelBase, &pidOffsetCount);
         NSMutableArray *offsetStrings = [NSMutableArray array];
@@ -1524,28 +1528,27 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
         result[@"procPidOffsetsFromAccessors"] = offsetStrings;
         result[@"procPidOffsetCount"] = @(pidOffsetCount);
 
-        procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result, pidOffsets, pidOffsetCount);
+        procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result,
+                                     pidOffsets, pidOffsetCount);
         free(pidOffsets);
-        if (procAddr) {
-            result[@"procSource"] = @"allproc";
-            // Save offsets to cache for future runs
-            uint64_t allprocOffset = 0;
-            if (result[@"allprocAddress"]) {
-                // allprocAddress is absolute; compute offset from kernelBase
-                uint64_t allprocAbs = SCParseHexAddress(result[@"allprocAddress"]);
-                if (allprocAbs > kernelBase) allprocOffset = allprocAbs - kernelBase;
-            }
-            size_t cachedListOff = [result[@"procListOffset"] unsignedIntegerValue];
-            size_t cachedPidOff = [result[@"procPidOffset"] unsignedIntegerValue];
-            if (allprocOffset > 0 && cachedPidOff > 0) {
-                SCSaveOffsetCache(kernelUUID, bootTime, allprocOffset, cachedListOff, cachedPidOff, 0);
-                result[@"offsetCacheSaved"] = @YES;
-            }
+    }
+    if (procAddr) {
+        result[@"procSource"] = @"allproc";
+        uint64_t allprocOffset = 0;
+        if (result[@"allprocAddress"]) {
+            uint64_t allprocAbs = SCParseHexAddress(result[@"allprocAddress"]);
+            if (allprocAbs > kernelBase) allprocOffset = allprocAbs - kernelBase;
+        }
+        size_t cachedListOff = [result[@"procListOffset"] unsignedIntegerValue];
+        size_t cachedPidOff = [result[@"procPidOffset"] unsignedIntegerValue];
+        if (allprocOffset > 0 && cachedPidOff > 0) {
+            SCSaveOffsetCache(kernelUUID, bootTime, allprocOffset, cachedListOff, cachedPidOff, 0);
+            result[@"offsetCacheSaved"] = @YES;
         }
     }
     if (procAddr == 0) {
         result[@"state"] = @"unsupported";
-        result[@"error"] = @"could not find current proc (kcall and allproc scanning both failed)";
+        result[@"error"] = @"could not find current proc from validated allproc candidates";
         result[@"vnodeAddress"] = @"0x0";
         close(fd);
         unlink(path);
@@ -1749,10 +1752,9 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
     if (canRunVFSTest) {
         SCKWriteFunction kwriteFunction = (SCKWriteFunction)dlsym(handle, "kwrite");
         if (kwriteFunction) {
-            SCKCallFunction kcallFunction = (SCKCallFunction)dlsym(handle, "kcall");
             NSString *vfsKernelUUID = krw[@"kernelProbe"][@"kernelUUID"];
             if (![vfsKernelUUID isKindOfClass:NSString.class]) vfsKernelUUID = @"";
-            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction, kcallFunction, vfsKernelUUID);
+            NSDictionary *vfsTest = SCRunVFSTest(kbaseFunction, kreadFunction, kwriteFunction, vfsKernelUUID);
             krw[@"vfsTest"] = vfsTest;
 
             NSMutableDictionary *safety = [report[@"safety"] mutableCopy];

@@ -28,6 +28,7 @@
 #import <mach/mach_init.h>
 #import <mach/mach_port.h>
 #import <substrate.h>
+#include <stdatomic.h>  // atomic_load / atomic_store / _Atomic
 #import <IOKit/IOKitLib.h>
 
 @class WKWebViewConfiguration;

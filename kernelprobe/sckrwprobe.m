@@ -1119,7 +1119,6 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
 
     const size_t chunkSize = 8192;
     const size_t procBufSize = 512;
-    const size_t maxListOff = 256;
 
     uint8_t *chunk = malloc(chunkSize);
     uint8_t *firstBuf = malloc(procBufSize);

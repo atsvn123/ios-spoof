@@ -423,7 +423,10 @@ static BOOL SCValidateReportContract(NSDictionary *report) {
     if (![report isKindOfClass:NSDictionary.class]) return NO;
     if (![report[@"schemaVersion"] isKindOfClass:NSNumber.class]) return NO;
     if ([report[@"schemaVersion"] integerValue] != 2) return NO;
-    if (![report[@"mode"] isEqualToString:@"read-only"]) return NO;
+
+    NSString *mode = report[@"mode"];
+    if (![mode isEqualToString:@"read-only"] &&
+        ![mode isEqualToString:@"hide-jb"]) return NO;
 
     NSDictionary *safety = report[@"safety"];
     if (![safety isKindOfClass:NSDictionary.class]) return NO;
@@ -444,16 +447,24 @@ static BOOL SCValidateReportContract(NSDictionary *report) {
         [transactionState isEqualToString:@"vfsTestQuarantined"] ||
         [transactionState isEqualToString:@"vfsTestUnsupported"];
 
+    BOOL hideJBAttempted = [transactionState isEqualToString:@"hideJBDone"] ||
+        [transactionState isEqualToString:@"hideJBFailed"];
+
+    // These flags must always be false (no kcall/physmem operations in any mode)
     NSArray<NSString *> *alwaysFalseKeys = @[
         @"kcallCalled", @"physreadCalled", @"physwriteCalled",
-        @"kernelMutationAllowed", @"artifactHidingEnabled"
+        @"kernelMutationAllowed"
     ];
     for (NSString *key in alwaysFalseKeys) {
         if (!SCIsBooleanFalse(safety[key])) return NO;
     }
 
+    // artifactHidingEnabled is only allowed when --hidejb was requested
+    if (!hideJBAttempted && !SCIsBooleanFalse(safety[@"artifactHidingEnabled"])) return NO;
+    if (![safety[@"artifactHidingEnabled"] isKindOfClass:NSNumber.class]) return NO;
+
     if (![safety[@"vnodeMutationCalled"] isKindOfClass:NSNumber.class]) return NO;
-    if (!vfsTestAttempted && [safety[@"vnodeMutationCalled"] boolValue]) return NO;
+    if (!vfsTestAttempted && !hideJBAttempted && [safety[@"vnodeMutationCalled"] boolValue]) return NO;
 
     NSDictionary *selfTest = krw[@"primitiveSelfTest"];
     if (selfTestAttempted && ![selfTest isKindOfClass:NSDictionary.class]) return NO;
@@ -2019,7 +2030,7 @@ static NSDictionary *SCBuildReport(BOOL shouldRunSelfTest, BOOL shouldRunVFSTest
     report[@"schemaVersion"] = @2;
     report[@"probeVersion"] = SCProbeVersion;
     report[@"timestamp"] = [formatter stringFromDate:NSDate.date];
-    report[@"mode"] = @"read-only";
+    report[@"mode"] = shouldRunHideJB ? @"hide-jb" : @"read-only";
     report[@"safety"] = [NSMutableDictionary dictionaryWithDictionary:@{
         @"kwriteCalled": @NO,
         @"kcallCalled": @NO,

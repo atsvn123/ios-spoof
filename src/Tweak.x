@@ -98,8 +98,10 @@ static void SCUpdateCFlags(void) {
     atomic_store(&sc_c_hide_jb, hjb);
 }
 
-// Per-thread reentrancy guard — prevents open→sc_open→[NSString]→open→∞
-static __thread int sc_hook_depth = 0;
+// Per-thread reentrancy guard — no longer needed since all C hooks are pure-C
+// (no ObjC calls in hot path). Kept as 0 constant so existing checks are no-ops.
+// Do NOT increment this — it was never incremented, so existing guards always pass.
+static __thread int sc_hook_depth = 0; // always 0; checks are benign no-ops
 
 static unsigned long long SCFakeTotalBytes(void) {
     NSUInteger gb = CFG().totalStorage;
@@ -1159,16 +1161,16 @@ static uint32_t *sc_dyld_visible_indices = NULL;
 static uint32_t  sc_dyld_visible_count   = 0;
 static uint32_t  sc_dyld_real_count_last = 0;
 
+// Pure-C — NO ObjC, no heap. Must stay ObjC-free: this is called while
+// sc_dyld_mutex is held. Calling ObjC here causes a deadlock because the
+// ObjC runtime internally calls _dyld_get_image_name, which re-enters
+// sc_dyld_get_image_name, which tries to re-acquire sc_dyld_mutex on the
+// same thread — PTHREAD_MUTEX_INITIALIZER is non-recursive → deadlock.
 static BOOL sc_is_jb_dylib_name(const char *name) {
     if (!name) return NO;
-    NSString *n = [NSString stringWithUTF8String:name];
-    // Lazy-init the patterns array via the existing sc_is_jb_path path
-    // (which inits sc_jb_dylib_patterns as a side-effect).
-    sc_is_jb_path(nil);
-    for (NSString *pat in sc_jb_dylib_patterns) {
-        if ([n containsString:pat]) return YES;
+    for (int i = 0; sc_jb_dylib_c[i]; i++) {
+        if (strstr(name, sc_jb_dylib_c[i])) return YES;
     }
-    if ([n containsString:@"iOSSpoof"]) return YES;
     return NO;
 }
 

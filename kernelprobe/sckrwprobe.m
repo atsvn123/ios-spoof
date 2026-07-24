@@ -1149,6 +1149,8 @@ static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allpr
         *(uint64_t *)(second + 0x00) != next2 ||
         *(uint64_t *)(third + 0x08) != prev3) return 0;
 
+    // allproc always begins with kernproc (pid=0). At least one of the first
+    // three entries must have pid == 0, otherwise this is not allproc.
     size_t validatedPidOff = SIZE_MAX;
     for (size_t i = 0; i < orderedCount; i++) {
         size_t pidOff = ordered[i];
@@ -1156,7 +1158,8 @@ static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allpr
         uint32_t pid2 = *(uint32_t *)(second + pidOff);
         uint32_t pid3 = *(uint32_t *)(third + pidOff);
         if (pid1 <= SCMaxPid && pid2 <= SCMaxPid && pid3 <= SCMaxPid &&
-            pid1 != pid2 && pid1 != pid3 && pid2 != pid3) {
+            pid1 != pid2 && pid1 != pid3 && pid2 != pid3 &&
+            (pid1 == 0 || pid2 == 0 || pid3 == 0)) {
             validatedPidOff = pidOff;
             break;
         }

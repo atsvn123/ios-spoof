@@ -71,6 +71,35 @@ static SCDevicePreset *P()  { return CFG().resolvedPreset; }
 static BOOL SC_ON()         { return CFG().enabled; }
 static BOOL SC_WEBKIT_ON()  { return SC_ON() && CFG().spoofWebKit; }
 
+// ============================================================================
+//  Atomic C-level flag cache — safe to read from ANY C hook without ObjC.
+//
+//  Problem: hooks like open/stat/getenv/dlopen are called by dyld, ObjC
+//  runtime, and libsystem before or during ObjC messaging. Calling CFG()
+//  (which does ObjC) from inside those hooks causes:
+//    - reentrancy: open → sc_open → [NSString ...] → open → sc_open → ∞
+//    - deadlock: dlopen holds dyld lock; ObjC messaging tries to acquire it
+//    - early-fire: hook fires before %ctor finishes initializing ObjC objects
+//
+//  Solution: cache the two booleans we need as C atomics, updated from ObjC
+//  only at safe points (prefs change, end of %ctor). All C hooks read the
+//  atomic, never touch ObjC.
+// ============================================================================
+static _Atomic(BOOL) sc_c_enabled    = NO;  // CFG().enabled
+static _Atomic(BOOL) sc_c_hide_jb    = NO;  // CFG().enabled && CFG().hideJailbreak
+static _Atomic(BOOL) sc_hooks_ready  = NO;  // set YES at end of %ctor
+
+// Call this from ObjC-safe contexts only (SCPostCenter, end of %ctor).
+static void SCUpdateCFlags(void) {
+    BOOL on  = CFG().enabled;
+    BOOL hjb = on && CFG().hideJailbreak;
+    atomic_store(&sc_c_enabled, on);
+    atomic_store(&sc_c_hide_jb, hjb);
+}
+
+// Per-thread reentrancy guard — prevents open→sc_open→[NSString]→open→∞
+static __thread int sc_hook_depth = 0;
+
 static unsigned long long SCFakeTotalBytes(void) {
     NSUInteger gb = CFG().totalStorage;
     if (gb == 0 && P().capacityGB.length) gb = (NSUInteger)[P().capacityGB integerValue];
@@ -211,6 +240,7 @@ static void SCPostCenter(CFNotificationCenterRef center, void *observer,
                          CFStringRef name, const void *object,
                          CFDictionaryRef userInfo) {
     [CFG() reload];
+    SCUpdateCFlags(); // sync atomics after prefs reload
 }
 
 // ============================================================================
@@ -825,58 +855,129 @@ static void SCInstallSystemVersionHooks(void) {
 %end
 
 // ============================================================================
-//  6. Jailbreak detection - statfs-based + hardcoded paths
-//     Học từ roothide: dùng statfs để check mount point thay vì chỉ check path string
+//  6. Jailbreak detection — pure-C, no ObjC, no statfs in hot path
+//
+//  CRITICAL: These hooks (open, stat, access, getenv, dlopen) are called by
+//  dyld, ObjC runtime, and libsystem internals. We MUST NOT:
+//    - call ObjC (SC_ON() / CFG()) — causes reentrancy crash
+//    - call statfs() from inside sc_stat/sc_open — infinite loop
+//    - allocate on heap — may re-enter open/stat
+//  Solution: pure C strcmp/strncmp/strstr, read from atomic flag sc_c_hide_jb.
 // ============================================================================
 
+// NSArray versions kept for ObjC-safe callers (dyld hook uses these).
 static NSArray *sc_jb_paths;
 static NSArray *sc_jb_path_prefixes;
 static NSArray *sc_jb_dylib_patterns;
 
-// statfs-based check: nếu file nằm trên mount point != "/" → có thể là jbroot
-static BOOL sc_is_jb_mountpoint(const char *path) {
-    if (!path) return NO;
-    struct statfs fs;
-    if (statfs(path, &fs) != 0) return NO; // path not found = might be jb
-    // Rootfs mount = "/"
-    if (strcmp(fs.f_mntonname, "/") == 0) return NO;
-    // If mounted on anything other than rootfs, likely jbroot
-    // Common jbroot mount points: /var/jb, /private/preboot, etc
-    if (strstr(fs.f_mntonname, "/var/jb") != NULL) return YES;
-    if (strstr(fs.f_mntonname, "/private/preboot") != NULL) return YES;
-    if (strstr(fs.f_mntonname, "/var/containers") != NULL) return NO; // app container, not jb
-    // Unknown mount point → treat as jb
-    if (strlen(fs.f_mntonname) > 1) return YES;
+// Pure-C exact paths (null-terminated list)
+static const char * const sc_jb_exact[] = {
+    "/Applications/Cydia.app",
+    "/Applications/Sileo.app",
+    "/Applications/Zebra.app",
+    "/Applications/Installer.app",
+    "/Applications/Rook.app",
+    "/Applications/Filza.app",
+    "/Applications/NewTerm.app",
+    "/Applications/MTerminal.app",
+    "/Applications/SSH.term",
+    "/Library/MobileSubstrate/MobileSubstrate.dylib",
+    "/usr/lib/substitute-loader.dylib",
+    "/usr/lib/substitute.dylib",
+    "/Library/Substitute",
+    "/usr/lib/substrate",
+    "/usr/lib/ellekit",
+    "/usr/lib/libellekit.dylib",
+    "/usr/lib/TweakInject",
+    "/Library/TweakInject",
+    "/bin/bash",
+    "/usr/sbin/sshd",
+    "/usr/bin/ssh",
+    "/etc/ssh/sshd_config",
+    "/usr/libexec/sftp-server",
+    "/usr/libexec/ssh-keysign",
+    "/etc/apt",
+    "/etc/apt/sources.list",
+    "/var/lib/apt",
+    "/var/cache/apt",
+    "/var/log/apt",
+    "/private/var/lib/apt",
+    "/private/var/cache/apt",
+    "/private/var/lib/cydia",
+    "/var/checkra1n.dmg",
+    "/.checkra1n",
+    "/var/checkra1n",
+    "/.bootstrapped",
+    "/.file",
+    "/usr/lib/pspawn-helper",
+    "/usr/lib/prebootHelper",
+    NULL
+};
+
+// Pure-C prefix list
+static const char * const sc_jb_prefix[] = {
+    "/var/jb/",
+    "/var/checkra1n",
+    "/.file",
+    "/usr/lib/ellekit",
+    "/private/preboot/",
+    "/var/jb/.basebin/",
+    "/var/containers/Bundle/Application/.jbroot",
+    NULL
+};
+
+// Pure-C dylib substrings (for path contains checks)
+static const char * const sc_jb_dylib_c[] = {
+    "MobileSubstrate",
+    "SubstrateLoader",
+    "ellekit",
+    "Substitute",
+    "TweakInject",
+    "cycript",
+    "libhooker",
+    "pspawn",
+    "prebootHelper",
+    "libsubstrate",
+    "substitute-loader",
+    "tweakinject",
+    "iOSSpoof",
+    NULL
+};
+
+// Pure-C check — no ObjC, no heap allocation, safe from any context.
+static BOOL sc_is_jb_path_c(const char *path) {
+    if (!path || path[0] == '\0') return NO;
+    for (int i = 0; sc_jb_exact[i]; i++) {
+        if (strcmp(path, sc_jb_exact[i]) == 0) return YES;
+    }
+    for (int i = 0; sc_jb_prefix[i]; i++) {
+        if (strncmp(path, sc_jb_prefix[i], strlen(sc_jb_prefix[i])) == 0) return YES;
+    }
     return NO;
 }
 
+// ObjC version kept for callers that are already in ObjC context (dyld hook).
 static BOOL sc_is_jb_path(NSString *p) {
     if (!sc_jb_paths) {
         sc_jb_paths = @[
-            // Classic JB
             @"/Applications/Cydia.app", @"/Applications/Sileo.app",
             @"/Applications/Zebra.app", @"/Applications/Installer.app",
             @"/Applications/Rook.app", @"/Applications/Filza.app",
             @"/Applications/NewTerm.app", @"/Applications/MTerminal.app",
             @"/Applications/SSH.term",
-            // Substrate/Substitute/Ellekit
             @"/Library/MobileSubstrate/MobileSubstrate.dylib",
             @"/usr/lib/substitute-loader.dylib", @"/usr/lib/substitute.dylib",
             @"/Library/Substitute", @"/usr/lib/substrate",
             @"/usr/lib/ellekit", @"/usr/lib/libellekit.dylib",
             @"/usr/lib/TweakInject", @"/Library/TweakInject",
-            // SSH/FTP
             @"/bin/bash", @"/usr/sbin/sshd", @"/usr/bin/ssh",
             @"/etc/ssh/sshd_config", @"/usr/libexec/sftp-server",
             @"/usr/libexec/ssh-keysign",
-            // APT
             @"/etc/apt", @"/etc/apt/sources.list",
             @"/var/lib/apt", @"/var/cache/apt", @"/var/log/apt",
             @"/private/var/lib/apt", @"/private/var/cache/apt",
             @"/private/var/lib/cydia",
-            // Checkra1n
             @"/var/checkra1n.dmg", @"/.checkra1n", @"/var/checkra1n",
-            // Other
             @"/.bootstrapped", @"/.file",
             @"/usr/lib/pspawn-helper", @"/usr/lib/prebootHelper",
         ];
@@ -893,23 +994,18 @@ static BOOL sc_is_jb_path(NSString *p) {
         ];
     }
     if (!p) return NO;
-    // Hardcoded exact match
     if ([sc_jb_paths containsObject:p]) return YES;
-    // Prefix match
     for (NSString *pre in sc_jb_path_prefixes) {
         if ([p hasPrefix:pre]) return YES;
     }
-    // statfs-based check (like roothide)
-    const char *cpath = [p UTF8String];
-    if (sc_is_jb_mountpoint(cpath)) return YES;
     return NO;
 }
 
 static int (*orig_access)(const char *, int);
 static int sc_access(const char *path, int mode) {
     if (!path) return orig_access(path, mode);
-    if (SC_ON() && CFG().hideJailbreak) {
-        if (sc_is_jb_path([NSString stringWithUTF8String:path])) return -1;
+    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
+        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
     }
     return orig_access(path, mode);
 }
@@ -917,11 +1013,8 @@ static int sc_access(const char *path, int mode) {
 static int (*orig_stat)(const char *, struct stat *);
 static int sc_stat(const char *path, struct stat *buf) {
     if (!path) return orig_stat(path, buf);
-    if (SC_ON() && CFG().hideJailbreak) {
-        if (sc_is_jb_path([NSString stringWithUTF8String:path])) {
-            errno = ENOENT;
-            return -1;
-        }
+    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
+        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
     }
     return orig_stat(path, buf);
 }
@@ -929,11 +1022,8 @@ static int sc_stat(const char *path, struct stat *buf) {
 static int (*orig_lstat)(const char *, struct stat *);
 static int sc_lstat(const char *path, struct stat *buf) {
     if (!path) return orig_lstat(path, buf);
-    if (SC_ON() && CFG().hideJailbreak) {
-        if (sc_is_jb_path([NSString stringWithUTF8String:path])) {
-            errno = ENOENT;
-            return -1;
-        }
+    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
+        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
     }
     return orig_lstat(path, buf);
 }
@@ -946,11 +1036,8 @@ static int sc_open(const char *path, int flags, ...) {
         mode = va_arg(ap, int); va_end(ap);
     }
     if (!path) return orig_open(path, flags, mode);
-    if (SC_ON() && CFG().hideJailbreak) {
-        if (sc_is_jb_path([NSString stringWithUTF8String:path])) {
-            errno = ENOENT;
-            return -1;
-        }
+    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
+        if (sc_is_jb_path_c(path)) { errno = ENOENT; return -1; }
     }
     return orig_open(path, flags, mode);
 }
@@ -979,23 +1066,23 @@ static int sc_open(const char *path, int flags, ...) {
 %end
 
 // Hook getenv - hide jailbreak env vars
+// SAFE: pure C strcmp, reads atomic flag only
 static char *(*orig_getenv)(const char *);
 static char *sc_getenv(const char *name) {
     if (!name) return orig_getenv(name);
-    if (SC_ON() && CFG().hideJailbreak) {
-        NSString *n = [NSString stringWithUTF8String:name];
-        if ([n isEqualToString:@"DYLD_INSERT_LIBRARIES"] ||
-            [n isEqualToString:@"_MSSafeMode"] ||
-            [n isEqualToString:@"SUBSTRATE_HOME"] ||
-            [n isEqualToString:@"ELLEKIT_HOME"] ||
-            [n isEqualToString:@"CFFIXED_USER_HOME"] ||
-            [n isEqualToString:@"DPREFIX"] ||
-            [n isEqualToString:@"JailbreakOverlayPath"] ||
-            [n isEqualToString:@"jailbreak"] ||
-            [n isEqualToString:@"TWEAKS_ROOT"] ||
-            [n isEqualToString:@"DOPAMINE_JB"] ||
-            [n isEqualToString:@"ROOTHIDE_JB"] ||
-            [n isEqualToString:@"CHECKRA1N_JB"]) {
+    if (atomic_load(&sc_c_hide_jb)) {
+        if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0 ||
+            strcmp(name, "_MSSafeMode") == 0 ||
+            strcmp(name, "SUBSTRATE_HOME") == 0 ||
+            strcmp(name, "ELLEKIT_HOME") == 0 ||
+            strcmp(name, "CFFIXED_USER_HOME") == 0 ||
+            strcmp(name, "DPREFIX") == 0 ||
+            strcmp(name, "JailbreakOverlayPath") == 0 ||
+            strcmp(name, "jailbreak") == 0 ||
+            strcmp(name, "TWEAKS_ROOT") == 0 ||
+            strcmp(name, "DOPAMINE_JB") == 0 ||
+            strcmp(name, "ROOTHIDE_JB") == 0 ||
+            strcmp(name, "CHECKRA1N_JB") == 0) {
             return NULL;
         }
     }
@@ -1006,22 +1093,21 @@ static char *sc_getenv(const char *name) {
 static FILE *(*orig_fopen)(const char *, const char *);
 static FILE *sc_fopen(const char *path, const char *mode) {
     if (!path) return orig_fopen(path, mode);
-    if (SC_ON() && CFG().hideJailbreak) {
-        if (sc_is_jb_path([NSString stringWithUTF8String:path])) {
-            return NULL;
-        }
+    if (atomic_load(&sc_c_hide_jb) && !sc_hook_depth) {
+        if (sc_is_jb_path_c(path)) return NULL;
     }
     return orig_fopen(path, mode);
 }
 
-// dlopen hook - block jailbreak detection dylibs
+// dlopen hook - block jailbreak dylibs
+// CRITICAL: dyld holds its own lock when calling dlopen. NEVER call ObjC here.
+// Pure C strstr only.
 static void *(*orig_dlopen)(const char *, int);
 static void *sc_dlopen(const char *path, int mode) {
     if (!path) return orig_dlopen(path, mode);
-    if (SC_ON() && CFG().hideJailbreak) {
-        NSString *p = [NSString stringWithUTF8String:path];
-        for (NSString *pattern in sc_jb_dylib_patterns) {
-            if ([p containsString:pattern]) return NULL;
+    if (atomic_load(&sc_c_hide_jb)) {
+        for (int i = 0; sc_jb_dylib_c[i]; i++) {
+            if (strstr(path, sc_jb_dylib_c[i])) return NULL;
         }
     }
     return orig_dlopen(path, mode);
@@ -1030,17 +1116,14 @@ static void *sc_dlopen(const char *path, int mode) {
 // fork() - banking apps check if fork() works
 static int (*orig_fork)(void);
 static pid_t sc_fork(void) {
-    if (SC_ON() && CFG().hideJailbreak) {
-        errno = ENOSYS;
-        return -1;
-    }
+    if (atomic_load(&sc_c_hide_jb)) { errno = ENOSYS; return -1; }
     return orig_fork();
 }
 
 // task_for_pid - banking apps detect debugger/jailbreak
 static int (*orig_task_for_pid)(pid_t, mach_port_t *);
 static int sc_task_for_pid(pid_t pid, mach_port_t *t) {
-    if (SC_ON() && CFG().hideJailbreak) {
+    if (atomic_load(&sc_c_hide_jb)) {
         if (t) *t = MACH_PORT_NULL;
         return 5; // KERN_FAILURE
     }
@@ -1110,7 +1193,7 @@ static void sc_rebuild_dyld_map_locked(uint32_t real_count) {
 
 static uint32_t sc_dyld_image_count(void) {
     uint32_t real = orig_dyld_image_count();
-    if (!SC_ON() || !CFG().hideJailbreak) return real;
+    if (!atomic_load(&sc_c_hide_jb)) return real;
     pthread_mutex_lock(&sc_dyld_mutex);
     if (real != sc_dyld_real_count_last) {
         sc_rebuild_dyld_map_locked(real);
@@ -1121,7 +1204,7 @@ static uint32_t sc_dyld_image_count(void) {
 }
 
 static const char *sc_dyld_get_image_name(uint32_t image_index) {
-    if (!SC_ON() || !CFG().hideJailbreak) {
+    if (!atomic_load(&sc_c_hide_jb)) {
         return orig_dyld_get_image_name(image_index);
     }
     pthread_mutex_lock(&sc_dyld_mutex);
@@ -1138,7 +1221,7 @@ static const char *sc_dyld_get_image_name(uint32_t image_index) {
 }
 
 static const struct mach_header *sc_dyld_get_image_header(uint32_t image_index) {
-    if (!SC_ON() || !CFG().hideJailbreak) {
+    if (!atomic_load(&sc_c_hide_jb)) {
         return orig_dyld_get_image_header(image_index);
     }
     pthread_mutex_lock(&sc_dyld_mutex);
@@ -1151,7 +1234,7 @@ static const struct mach_header *sc_dyld_get_image_header(uint32_t image_index) 
 }
 
 static intptr_t sc_dyld_get_image_vmaddr_slide(uint32_t image_index) {
-    if (!SC_ON() || !CFG().hideJailbreak) {
+    if (!atomic_load(&sc_c_hide_jb)) {
         return orig_dyld_get_image_vmaddr_slide(image_index);
     }
     pthread_mutex_lock(&sc_dyld_mutex);
@@ -1163,21 +1246,15 @@ static intptr_t sc_dyld_get_image_vmaddr_slide(uint32_t image_index) {
     return slide;
 }
 
-// sandbox_check - banking apps use sandbox_check for jailbreak detection
-static int (*orig_sandbox_init)(const char *, uint64_t, char **);
-static int sc_sandbox_init(const char *profile, uint64_t flags, char **errorbuf) {
-    return orig_sandbox_init(profile, flags, errorbuf);
-}
-
 // csops - banking apps check CS_OPS_STATUS for code signing flags
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 static int (*orig_csops)(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
 static int sc_csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize) {
     int r = orig_csops(pid, ops, useraddr, usersize);
-    if (r == 0 && SC_ON() && CFG().hideJailbreak && ops == 0 && useraddr && usersize >= sizeof(uint32_t)) {
+    if (r == 0 && atomic_load(&sc_c_hide_jb) && ops == 0 && useraddr && usersize >= sizeof(uint32_t)) {
         uint32_t *flags = (uint32_t *)useraddr;
-        *flags &= ~0x04000000; // CS_PLATFORM_BINARY
-        *flags &= ~0x10000000; // CS_DEBUGGED
+        *flags &= ~0x04000000u; // CS_PLATFORM_BINARY
+        *flags &= ~0x10000000u; // CS_DEBUGGED
     }
     return r;
 }
@@ -1195,21 +1272,27 @@ static int sc_csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize
 // We need a separate hook for KERN_PROC to filter process names
 static int (*orig_proc_pidpath)(pid_t pid, void *buffer, uint32_t buffersize);
 extern int proc_pidpath(pid_t pid, void *buffer, uint32_t buffersize);
+// Pure-C substrings to match against jailbreak process names/paths
+static const char * const sc_jb_proc_keywords[] = {
+    "jailbreakd", "sshd", "bash", "substrate", "ellekit", "dpkg",
+    "apt", "cydia", "sileo", "zebra", "tweakloader", "roothide",
+    "dopamine", "jbctl", "iOSSpoof", "iosSpoof", "Bootstrapper",
+    NULL
+};
+
+static BOOL sc_is_jb_proc_c(const char *s) {
+    if (!s) return NO;
+    for (int i = 0; sc_jb_proc_keywords[i]; i++)
+        if (strstr(s, sc_jb_proc_keywords[i])) return YES;
+    return NO;
+}
+
 static int sc_proc_pidpath(pid_t pid, void *buffer, uint32_t buffersize) {
     int r = orig_proc_pidpath(pid, buffer, buffersize);
-    if (r > 0 && SC_ON() && CFG().hideJailbreak && buffer) {
+    if (r > 0 && atomic_load(&sc_c_hide_jb) && buffer) {
         char *path = (char *)buffer;
-        NSString *p = [NSString stringWithUTF8String:path];
-        // Hide jailbreak process paths
-        if ([p containsString:@"jailbreakd"] || [p containsString:@"sshd"] ||
-            [p containsString:@"bash"] || [p containsString:@"substrate"] ||
-            [p containsString:@"ellekit"] || [p containsString:@"dpkg"] ||
-            [p containsString:@"apt"] || [p containsString:@"cydia"] ||
-            [p containsString:@"sileo"] || [p containsString:@"zebra"] ||
-            [p containsString:@"tweakloader"] || [p containsString:@"roothide"] ||
-            [p containsString:@"dopamine"] || [p containsString:@"jbctl"]) {
+        if (sc_is_jb_proc_c(path))
             strlcpy(path, "/usr/libexec/logd", buffersize);
-        }
     }
     return r;
 }
@@ -1218,17 +1301,10 @@ static int (*orig_proc_name)(pid_t pid, void *buffer, uint32_t buffersize);
 extern int proc_name(pid_t pid, void *buffer, uint32_t buffersize);
 static int sc_proc_name(pid_t pid, void *buffer, uint32_t buffersize) {
     int r = orig_proc_name(pid, buffer, buffersize);
-    if (r > 0 && SC_ON() && CFG().hideJailbreak && buffer) {
+    if (r > 0 && atomic_load(&sc_c_hide_jb) && buffer) {
         char *name = (char *)buffer;
-        if (strstr(name, "jailbreakd") || strstr(name, "sshd") ||
-            strstr(name, "bash") || strstr(name, "substrate") ||
-            strstr(name, "ellekit") || strstr(name, "dpkg") ||
-            strstr(name, "apt") || strstr(name, "cydia") ||
-            strstr(name, "sileo") || strstr(name, "zebra") ||
-            strstr(name, "tweakloader") || strstr(name, "roothide") ||
-            strstr(name, "dopamine") || strstr(name, "jbctl")) {
+        if (sc_is_jb_proc_c(name))
             strlcpy(name, "launchd", buffersize);
-        }
     }
     return r;
 }
@@ -1244,16 +1320,11 @@ static int sc_proc_name(pid_t pid, void *buffer, uint32_t buffersize) {
 static ssize_t (*orig_readlink)(const char *, char *, size_t);
 static ssize_t sc_readlink(const char *path, char *buf, size_t bufsize) {
     ssize_t r = orig_readlink(path, buf, bufsize);
-    if (r > 0 && SC_ON() && CFG().hideJailbreak && path) {
-        NSString *p = [NSString stringWithUTF8String:path];
-        // Hide jailbreak symlinks
-        if ([p hasPrefix:@"/var/jb"] || [p hasPrefix:@"/private/preboot"]) {
-            NSString *result = [NSString stringWithUTF8String:buf];
-            if ([result containsString:@"/var/jb"] || [result containsString:@"jbroot"] ||
-                [result containsString:@"substrate"] || [result containsString:@"ellekit"]) {
-                strlcpy(buf, "/usr/lib", bufsize);
-                r = strlen(buf);
-            }
+    if (r > 0 && atomic_load(&sc_c_hide_jb) && path && buf) {
+        // If the symlink target resolves into a JB path, hide it
+        if (sc_is_jb_path_c(buf) || sc_is_jb_proc_c(buf)) {
+            strlcpy(buf, "/usr/lib", bufsize);
+            r = strlen(buf);
         }
     }
     return r;
@@ -1263,51 +1334,57 @@ static ssize_t sc_readlink(const char *path, char *buf, size_t bufsize) {
 static char *(*orig_realpath)(const char *, char *);
 static char *sc_realpath(const char *path, char *resolved) {
     char *r = orig_realpath(path, resolved);
-    if (r && SC_ON() && CFG().hideJailbreak && path) {
-        NSString *p = [NSString stringWithUTF8String:path];
-        if ([p hasPrefix:@"/var/jb"] || [p hasPrefix:@"/private/preboot"]) {
-            NSString *result = [NSString stringWithUTF8String:r];
-            if ([result containsString:@"/var/jb"] || [result containsString:@"jbroot"] ||
-                [result containsString:@"/private/preboot"]) {
-                // Return original path instead of resolved
-                strlcpy(r, path, PATH_MAX);
-            }
+    if (r && atomic_load(&sc_c_hide_jb) && path) {
+        if (sc_is_jb_path_c(r) || sc_is_jb_proc_c(r)) {
+            // Return the original (un-resolved) path to avoid leaking jbroot
+            strlcpy(r, path, PATH_MAX);
         }
     }
     return r;
 }
 
-// posix_spawn — strip DYLD_INSERT_LIBRARIES from child process env
+// posix_spawn — strip DYLD_INSERT_LIBRARIES from child process env (pure C, no ObjC)
+static const char * const sc_posix_spawn_strip_prefixes[] = {
+    "DYLD_INSERT_LIBRARIES=",
+    "_MSSafeMode=",
+    "ELLEKIT_HOME=",
+    "SUBSTRATE_HOME=",
+    "TWEAKS_ROOT=",
+    "CFFIXED_USER_HOME=",
+    NULL
+};
+
 static int (*orig_posix_spawn)(pid_t *, const char *, const posix_spawn_file_actions_t *, const posix_spawnattr_t *, char *const[], char *const[]);
 static int sc_posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *file_actions, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[]) {
-    if (SC_ON() && CFG().hideJailbreak && envp) {
-        @try {
-            NSMutableArray *newEnv = [NSMutableArray array];
-            for (char *const *e = envp; *e; e++) {
-                NSString *env = [NSString stringWithUTF8String:*e];
-                if (![env hasPrefix:@"DYLD_INSERT_LIBRARIES="] &&
-                    ![env hasPrefix:@"_MSSafeMode="] &&
-                    ![env hasPrefix:@"ELLEKIT_HOME="] &&
-                    ![env hasPrefix:@"SUBSTRATE_HOME="] &&
-                    ![env hasPrefix:@"TWEAKS_ROOT="] &&
-                    ![env hasPrefix:@"CFFIXED_USER_HOME="]) {
-                    [newEnv addObject:env];
-                }
+    if (!atomic_load(&sc_c_hide_jb) || !envp)
+        return orig_posix_spawn(pid, path, file_actions, attrp, argv, envp);
+
+    // Count envp entries
+    int total = 0;
+    while (envp[total]) total++;
+
+    // Build filtered env on stack for small envs, heap for large
+    char **newEnvp = (char **)calloc((size_t)(total + 1), sizeof(char *));
+    if (!newEnvp)
+        return orig_posix_spawn(pid, path, file_actions, attrp, argv, envp);
+
+    int count = 0;
+    for (int i = 0; i < total; i++) {
+        BOOL strip = NO;
+        for (int j = 0; sc_posix_spawn_strip_prefixes[j]; j++) {
+            if (strncmp(envp[i], sc_posix_spawn_strip_prefixes[j],
+                        strlen(sc_posix_spawn_strip_prefixes[j])) == 0) {
+                strip = YES;
+                break;
             }
-            NSUInteger count = newEnv.count;
-            if (count > 0) {
-                char **newEnvp = (char **)calloc(count + 1, sizeof(char *));
-                for (NSUInteger i = 0; i < count; i++) {
-                    newEnvp[i] = (char *)[newEnv[i] UTF8String];
-                }
-                newEnvp[count] = NULL;
-                int r = orig_posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
-                free(newEnvp);
-                return r;
-            }
-        } @catch (__unused id e) {}
+        }
+        if (!strip) newEnvp[count++] = envp[i];
     }
-    return orig_posix_spawn(pid, path, file_actions, attrp, argv, envp);
+    newEnvp[count] = NULL;
+
+    int r = orig_posix_spawn(pid, path, file_actions, attrp, argv, newEnvp);
+    free(newEnvp);
+    return r;
 }
 
 // ============================================================================
@@ -1862,5 +1939,11 @@ static void SCInstallMobileGestaltHooks(void) {
         MSHookFunction((void *)&_dyld_get_image_vmaddr_slide,
                        (void *)sc_dyld_get_image_vmaddr_slide,
                        (void **)&orig_dyld_get_image_vmaddr_slide);
+
+        // Sync atomic C-flags from ObjC config now that all hooks are installed
+        // and ObjC is fully initialized. C hooks read these atomics instead of
+        // calling CFG() directly, avoiding reentrancy, deadlock, and early-fire.
+        SCUpdateCFlags();
+        atomic_store(&sc_hooks_ready, YES);
     }
 }

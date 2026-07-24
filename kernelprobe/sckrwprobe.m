@@ -1296,56 +1296,6 @@ static uint64_t SCFindCurrentProc(SCKReadFunction kread,
                     }
                     if (walkCount > maxWalkLen) maxWalkLen = walkCount;
                 }
-
-                        // Check candidate p_pid offsets first (from proc_pid accessor scan)
-                        // then fall back to scanning ALL 4-byte offsets
-                        if (pidOffsetCount > 0) {
-                            for (size_t pi = 0; pi < pidOffsetCount; pi++) {
-                                size_t pidOff = pidOffsets[pi];
-                                if (pidOff + 4 > procBufSize) continue;
-                                if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
-                                if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
-                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
-                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                                    diagnostics[@"allprocOffset"] = @(offset + i);
-                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
-                                    diagnostics[@"procListOffset"] = @(leOff);
-                                    diagnostics[@"procPidOffset"] = @(pidOff);
-                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
-                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
-                                    diagnostics[@"maxWalkLen"] = @(walkCount + 1);
-                                    return procAddr;
-                                }
-                            }
-                        } else {
-                            // Scan ALL 4-byte offsets for targetPid
-                            for (size_t pidOff = 0; pidOff + 4 <= procBufSize; pidOff += 4) {
-                                if (pidOff + 4 > leOff && pidOff < leOff + 16) continue;
-                                if (*(uint32_t *)(walkBuf + pidOff) == (uint32_t)targetPid) {
-                                    free(chunk); free(firstBuf); free(secondBuf); free(thirdBuf); free(walkBuf);
-                                    diagnostics[@"allprocSection"] = [NSString stringWithUTF8String:scans[si].name];
-                                    diagnostics[@"allprocOffset"] = @(offset + i);
-                                    diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
-                                    diagnostics[@"procListOffset"] = @(leOff);
-                                    diagnostics[@"procPidOffset"] = @(pidOff);
-                                    diagnostics[@"procAddress"] = SCHexAddress(procAddr);
-                                    diagnostics[@"scanCandidates"] = @(totalCandidates);
-                                    diagnostics[@"lePrevMatched"] = @(lePrevMatched);
-                                    diagnostics[@"maxWalkLen"] = @(walkCount + 1);
-                                    return procAddr;
-                                }
-                            }
-                        }
-
-                        uint64_t next = *(uint64_t *)(walkBuf + leOff);
-                        if (next == procAddr) break;
-                        procAddr = next;
-                        if (procAddr != 0 && !SCKernelPtrValid(procAddr)) break;
-                        walkCount++;
-                    }
-                    if (walkCount > maxWalkLen) maxWalkLen = walkCount;
-                }
             }
         }
     }

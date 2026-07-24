@@ -1927,10 +1927,22 @@ static NSDictionary *SCRunHideJB(SCKBaseFunction kbaseFunction,
 
     for (NSString *pathNS in allPaths) {
         const char *path = pathNS.fileSystemRepresentation;
-        // O_PATH: open without read/exec permission, just for fd chain traversal
-        int fd = open(path, O_PATH | O_NOFOLLOW);
+        // O_PATH does not exist on Darwin. Try O_RDONLY|O_NOFOLLOW; if EISDIR,
+        // retry with O_DIRECTORY; if ELOOP (it's a symlink), follow it so we get
+        // the target vnode (symlinks themselves are also walked via the target).
+        int fd = open(path, O_RDONLY | O_NOFOLLOW);
+        if (fd < 0 && errno == EISDIR) {
+            fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        }
+        if (fd < 0 && errno == ELOOP) {
+            // Symlink — follow to get target vnode
+            fd = open(path, O_RDONLY);
+            if (fd < 0 && errno == EISDIR) {
+                fd = open(path, O_RDONLY | O_DIRECTORY);
+            }
+        }
         if (fd < 0) {
-            // Not present or no access — not a failure
+            // Not present or no access — not a hard failure
             [failedPaths addObject:@{@"path": pathNS, @"reason": @"open failed",
                                      @"errno": @(errno)}];
             continue;

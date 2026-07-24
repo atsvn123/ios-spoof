@@ -89,7 +89,7 @@
         }
         case 5: {
             switch (i.row) {
-                case 0: return [self cellWithTitle:@"iOS Version" detail:self.config.systemVersion ?: @"17.5"];
+                case 0: return [self cellWithTitle:@"iOS Version" detail:self.config.systemVersion.length ? self.config.systemVersion : @"17.5"];
                 case 1: return [self cellWithTitle:@"Build ID" detail:[self effectiveBuildID]];
                 case 2: return [self cellWithTitle:@"Total Storage" detail:[NSString stringWithFormat:@"%lu GB%@", (unsigned long)[self effectiveTotalStorage], self.config.totalStorage > 0 ? @"" : @" (Auto)"]];
                 case 3: return [self cellWithTitle:@"Free Storage" detail:[NSString stringWithFormat:@"%lu GB%@", (unsigned long)[self effectiveFreeStorage], self.config.freeStorage > 0 ? @"" : @" (Auto)"]];
@@ -98,7 +98,9 @@
                 case 6: return [self cellWithTitle:@"Unique ID" detail:self.config.uniqueID.length ? self.config.uniqueID : @"Auto"];
                 case 7: return [self cellWithTitle:@"Spoof Battery" detail:self.config.spoofBattery ? @"Bật" : @"Tắt"];
                 case 8: return [self cellWithTitle:@"Hide Jailbreak" detail:self.config.hideJailbreak ? @"Bật" : @"Tắt"];
+                default: break;
             }
+            break;
         }
         case 6: {
             switch (i.row) {
@@ -106,14 +108,18 @@
                 case 1: return [self cellWithTitle:@"BT Device" detail:self.config.bluetoothDeviceName.length ? self.config.bluetoothDeviceName : @"None"];
                 case 2: return [self cellWithTitle:@"BT Connected" detail:self.config.bluetoothConnected ? @"Bật" : @"Tắt"];
                 case 3: return [self cellWithTitle:@"Signal" detail:[NSString stringWithFormat:@"%ld bars", (long)self.config.signalStrength]];
+                default: break;
             }
+            break;
         }
         case 7: {
             switch (i.row) {
                 case 0: return [self cellWithTitle:@"Locale" detail:self.config.localeIdentifier.length ? self.config.localeIdentifier : @"System"];
                 case 1: return [self cellWithTitle:@"Timezone" detail:self.config.timezoneIdentifier.length ? self.config.timezoneIdentifier : @"System"];
                 case 2: return [self cellWithTitle:@"Timestamp" detail:self.config.timestampOffset == 0 ? @"Off" : [NSString stringWithFormat:@"%+ldh", (long)(self.config.timestampOffset / 3600)]];
+                default: break;
             }
+            break;
         }
         case 8: {
             UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];

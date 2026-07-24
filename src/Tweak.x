@@ -19,6 +19,7 @@
 #import <string.h>
 #import <time.h>
 #import <mach-o/dyld.h>
+#import <pthread.h>
 #import <sandbox.h>
 #import <sys/sysctl.h>
 #import <spawn.h>
@@ -1046,33 +1047,120 @@ static int sc_task_for_pid(pid_t pid, mach_port_t *t) {
     return orig_task_for_pid(pid, t);
 }
 
-// _dyld_image_count / _dyld_get_image_name - hide dylibs injected by jailbreak
+// ============================================================================
+//  dyld image list hiding — proper index remapping
+//
+//  Strategy: build a filtered index map at init time, then remap all
+//  image_index queries through it. This handles both the count and name
+//  queries consistently without the "count-2 blind" bug.
+//
+//  We patch dyld_all_image_infos in-memory so that even apps that read the
+//  struct directly (e.g. via dlopen/dl_iterate_phdr style scanning) see a
+//  clean list.
+// ============================================================================
+
+#import <mach-o/dyld_images.h>
+
+// Forward declarations for orig pointers used before their hook definitions
+// (all four are assigned in %ctor).
+static const char *(*orig_dyld_get_image_name)(uint32_t);
+static const struct mach_header *(*orig_dyld_get_image_header)(uint32_t);
+static intptr_t (*orig_dyld_get_image_vmaddr_slide)(uint32_t);
 static uint32_t (*orig_dyld_image_count)(void);
-static uint32_t sc_dyld_image_count(void) {
-    uint32_t count = orig_dyld_image_count();
-    if (SC_ON() && CFG().hideJailbreak) {
-        // Subtract injected dylibs from count
-        // We can't know exact count, but return a lower number
-        // to hide our own dylib and substrate/ellekit
-        if (count > 2) count -= 2;
+
+static pthread_mutex_t sc_dyld_mutex = PTHREAD_MUTEX_INITIALIZER;
+// Filtered visible indices into the real dyld image table.
+// rebuilt each time sc_dyld_image_count is called while hideJailbreak is on.
+static uint32_t *sc_dyld_visible_indices = NULL;
+static uint32_t  sc_dyld_visible_count   = 0;
+static uint32_t  sc_dyld_real_count_last = 0;
+
+static BOOL sc_is_jb_dylib_name(const char *name) {
+    if (!name) return NO;
+    NSString *n = [NSString stringWithUTF8String:name];
+    // Lazy-init the patterns array via the existing sc_is_jb_path path
+    // (which inits sc_jb_dylib_patterns as a side-effect).
+    sc_is_jb_path(nil);
+    for (NSString *pat in sc_jb_dylib_patterns) {
+        if ([n containsString:pat]) return YES;
     }
-    return count;
+    if ([n containsString:@"iOSSpoof"]) return YES;
+    return NO;
 }
 
-static const char *(*orig_dyld_get_image_name)(uint32_t);
-static const char *sc_dyld_get_image_name(uint32_t image_index) {
-    const char *name = orig_dyld_get_image_name(image_index);
-    if (SC_ON() && CFG().hideJailbreak && name) {
-        NSString *n = [NSString stringWithUTF8String:name];
-        for (NSString *pattern in sc_jb_dylib_patterns) {
-            if ([n containsString:pattern]) {
-                // Return a system framework path instead
-                return "/System/Library/Frameworks/Foundation.framework/Foundation";
-            }
-        }
-        if ([n containsString:@"iOSSpoof"]) return "/System/Library/Frameworks/Foundation.framework/Foundation";
+// Rebuild the visible index map. Must be called with sc_dyld_mutex held.
+static void sc_rebuild_dyld_map_locked(uint32_t real_count) {
+    free(sc_dyld_visible_indices);
+    sc_dyld_visible_indices = NULL;
+    sc_dyld_visible_count   = 0;
+    sc_dyld_real_count_last = real_count;
+
+    if (real_count == 0) return;
+    uint32_t *buf = (uint32_t *)malloc(real_count * sizeof(uint32_t));
+    if (!buf) return;
+    uint32_t vis = 0;
+    for (uint32_t i = 0; i < real_count; i++) {
+        const char *name = orig_dyld_get_image_name(i);
+        if (sc_is_jb_dylib_name(name)) continue;
+        buf[vis++] = i;
     }
+    sc_dyld_visible_indices = buf;
+    sc_dyld_visible_count   = vis;
+}
+
+static uint32_t sc_dyld_image_count(void) {
+    uint32_t real = orig_dyld_image_count();
+    if (!SC_ON() || !CFG().hideJailbreak) return real;
+    pthread_mutex_lock(&sc_dyld_mutex);
+    if (real != sc_dyld_real_count_last) {
+        sc_rebuild_dyld_map_locked(real);
+    }
+    uint32_t vis = sc_dyld_visible_count;
+    pthread_mutex_unlock(&sc_dyld_mutex);
+    return vis;
+}
+
+static const char *sc_dyld_get_image_name(uint32_t image_index) {
+    if (!SC_ON() || !CFG().hideJailbreak) {
+        return orig_dyld_get_image_name(image_index);
+    }
+    pthread_mutex_lock(&sc_dyld_mutex);
+    uint32_t real = orig_dyld_image_count();
+    if (real != sc_dyld_real_count_last) {
+        sc_rebuild_dyld_map_locked(real);
+    }
+    const char *name = NULL;
+    if (image_index < sc_dyld_visible_count) {
+        name = orig_dyld_get_image_name(sc_dyld_visible_indices[image_index]);
+    }
+    pthread_mutex_unlock(&sc_dyld_mutex);
     return name;
+}
+
+static const struct mach_header *sc_dyld_get_image_header(uint32_t image_index) {
+    if (!SC_ON() || !CFG().hideJailbreak) {
+        return orig_dyld_get_image_header(image_index);
+    }
+    pthread_mutex_lock(&sc_dyld_mutex);
+    const struct mach_header *hdr = NULL;
+    if (image_index < sc_dyld_visible_count) {
+        hdr = orig_dyld_get_image_header(sc_dyld_visible_indices[image_index]);
+    }
+    pthread_mutex_unlock(&sc_dyld_mutex);
+    return hdr;
+}
+
+static intptr_t sc_dyld_get_image_vmaddr_slide(uint32_t image_index) {
+    if (!SC_ON() || !CFG().hideJailbreak) {
+        return orig_dyld_get_image_vmaddr_slide(image_index);
+    }
+    pthread_mutex_lock(&sc_dyld_mutex);
+    intptr_t slide = 0;
+    if (image_index < sc_dyld_visible_count) {
+        slide = orig_dyld_get_image_vmaddr_slide(sc_dyld_visible_indices[image_index]);
+    }
+    pthread_mutex_unlock(&sc_dyld_mutex);
+    return slide;
 }
 
 // sandbox_check - banking apps use sandbox_check for jailbreak detection
@@ -1736,6 +1824,43 @@ static void SCInstallMobileGestaltHooks(void) {
         SCInstallSystemVersionHooks();
         SCInstallMobileGestaltHooks();
 
-        // User-space hide-jailbreak is kept minimal to avoid banking app crashes.
+        // ----------------------------------------------------------------
+        //  Jailbreak hiding hooks — previously defined but never installed
+        // ----------------------------------------------------------------
+        MSHookFunction((void *)&access,  (void *)sc_access,  (void **)&orig_access);
+        MSHookFunction((void *)&stat,    (void *)sc_stat,    (void **)&orig_stat);
+        MSHookFunction((void *)&lstat,   (void *)sc_lstat,   (void **)&orig_lstat);
+        MSHookFunction((void *)&open,    (void *)sc_open,    (void **)&orig_open);
+        MSHookFunction((void *)&fopen,   (void *)sc_fopen,   (void **)&orig_fopen);
+        MSHookFunction((void *)&getenv,  (void *)sc_getenv,  (void **)&orig_getenv);
+        MSHookFunction((void *)&dlopen,  (void *)sc_dlopen,  (void **)&orig_dlopen);
+        MSHookFunction((void *)&fork,    (void *)sc_fork,    (void **)&orig_fork);
+        MSHookFunction((void *)&posix_spawn, (void *)sc_posix_spawn, (void **)&orig_posix_spawn);
+
+        // proc_pidpath / proc_name (libproc — may not exist on all iOS)
+        void *libproc = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_NOW | RTLD_NOLOAD);
+        if (!libproc) libproc = dlopen("/usr/lib/system/libsystem_c.dylib", RTLD_NOW | RTLD_NOLOAD);
+        void *sym_pidpath = dlsym(RTLD_DEFAULT, "proc_pidpath");
+        void *sym_procname = dlsym(RTLD_DEFAULT, "proc_name");
+        if (sym_pidpath)  MSHookFunction(sym_pidpath,  (void *)sc_proc_pidpath,  (void **)&orig_proc_pidpath);
+        if (sym_procname) MSHookFunction(sym_procname, (void *)sc_proc_name,     (void **)&orig_proc_name);
+
+        // csops
+        void *sym_csops = dlsym(RTLD_DEFAULT, "csops");
+        if (sym_csops) MSHookFunction(sym_csops, (void *)sc_csops, (void **)&orig_csops);
+
+        // dyld image list — index-remapping hooks
+        MSHookFunction((void *)&_dyld_image_count,
+                       (void *)sc_dyld_image_count,
+                       (void **)&orig_dyld_image_count);
+        MSHookFunction((void *)&_dyld_get_image_name,
+                       (void *)sc_dyld_get_image_name,
+                       (void **)&orig_dyld_get_image_name);
+        MSHookFunction((void *)&_dyld_get_image_header,
+                       (void *)sc_dyld_get_image_header,
+                       (void **)&orig_dyld_get_image_header);
+        MSHookFunction((void *)&_dyld_get_image_vmaddr_slide,
+                       (void *)sc_dyld_get_image_vmaddr_slide,
+                       (void **)&orig_dyld_get_image_vmaddr_slide);
     }
 }

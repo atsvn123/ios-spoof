@@ -1107,23 +1107,47 @@ static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allpr
     uint64_t secondLinks[2] = {0};
     uint64_t thirdLinks[2] = {0};
 
-    if (kread(allprocAddr, &firstProc, sizeof(firstProc)) != 0 || !SCKernelPtrValid(firstProc)) return 0;
+    // allproc may have lock padding before lh_first (e.g. lck_rw_t = 16 bytes on newer XNU).
+    // Try offsets 0, 8, 16, 24 to find the real lh_first pointer.
+    uint64_t lhFirstAddr = 0;
+    for (int hdrOff = 0; hdrOff <= 32; hdrOff += 8) {
+        uint64_t candidate = 0;
+        if (kread(allprocAddr + hdrOff, &candidate, sizeof(candidate)) != 0) continue;
+        if (!SCKernelPtrValid(candidate)) continue;
+        // Read le_prev from this candidate proc — it must point back to allprocAddr+hdrOff
+        uint64_t leprev = 0;
+        if (kread(candidate + 8, &leprev, sizeof(leprev)) != 0) continue;
+        if (leprev != allprocAddr + hdrOff) continue;
+        // Confirm: reading lhFirstAddr gives back the same candidate
+        uint64_t confirm = 0;
+        if (kread(leprev, &confirm, sizeof(confirm)) != 0) continue;
+        if (confirm != candidate) continue;
+        firstProc = candidate;
+        lhFirstAddr = (uint64_t)(allprocAddr + hdrOff);
+        break;
+    }
+    if (firstProc == 0 || lhFirstAddr == 0) return 0;
+
     if (kread(firstProc, firstLinks, sizeof(firstLinks)) != 0) return 0;
     uint64_t next1 = firstLinks[0];
-    if (!SCKernelPtrValid(next1)) return 0;
+    uint64_t prev1 = firstLinks[1];
+    if (!SCKernelPtrValid(next1) || prev1 != lhFirstAddr) return 0;
 
     if (kread(next1, secondLinks, sizeof(secondLinks)) != 0) return 0;
     uint64_t next2 = secondLinks[0];
-    if (!SCKernelPtrValid(next2)) return 0;
+    uint64_t prev2 = secondLinks[1];
+    if (!SCKernelPtrValid(next2) || prev2 != firstProc) return 0;
 
     if (kread(next2, thirdLinks, sizeof(thirdLinks)) != 0) return 0;
+    uint64_t prev3 = thirdLinks[1];
+    if (prev3 != next1) return 0;
 
     if (kread(firstProc, first, procReadSize) != 0 ||
         kread(next1, second, procReadSize) != 0 ||
         kread(next2, third, procReadSize) != 0) return 0;
-    // Verify forward links are self-consistent (le_next only — le_prev varies by kernel build)
     if (*(uint64_t *)(first + 0x00) != next1 ||
-        *(uint64_t *)(second + 0x00) != next2) return 0;
+        *(uint64_t *)(second + 0x00) != next2 ||
+        *(uint64_t *)(third + 0x08) != prev3) return 0;
 
     size_t validatedPidOff = SIZE_MAX;
     for (size_t i = 0; i < orderedCount; i++) {
@@ -1140,6 +1164,7 @@ static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allpr
     if (validatedPidOff == SIZE_MAX) return 0;
 
     uint64_t procAddr = firstProc;
+    uint64_t expectedPrev = lhFirstAddr;
     int walkCount = 0;
     while (procAddr != 0 && walkCount < 4096) {
         if (procAddr == firstProc) memcpy(walk, first, procReadSize);
@@ -1148,11 +1173,13 @@ static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allpr
         else if (kread(procAddr, walk, procReadSize) != 0) break;
 
         uint64_t next = *(uint64_t *)(walk + 0x00);
+        uint64_t prev = *(uint64_t *)(walk + 0x08);
         uint32_t pid = *(uint32_t *)(walk + validatedPidOff);
-        if (pid > SCMaxPid) break;
+        if (prev != expectedPrev || pid > SCMaxPid) break;
         walkCount++;
         if (pid == (uint32_t)targetPid) {
             diagnostics[@"allprocAddress"] = SCHexAddress(allprocAddr);
+            diagnostics[@"lhFirstAddress"] = SCHexAddress(lhFirstAddr);
             diagnostics[@"procListOffset"] = @0;
             diagnostics[@"procPidOffset"] = @(validatedPidOff);
             diagnostics[@"procAddress"] = SCHexAddress(procAddr);
@@ -1161,6 +1188,7 @@ static uint64_t SCValidateAllprocCandidate(SCKReadFunction kread, uint64_t allpr
             return procAddr;
         }
         if (next == 0 || next == procAddr || !SCKernelPtrValid(next)) break;
+        expectedPrev = procAddr;
         procAddr = next;
     }
     if (walkCount > [diagnostics[@"maxWalkLen"] intValue]) diagnostics[@"maxWalkLen"] = @(walkCount);

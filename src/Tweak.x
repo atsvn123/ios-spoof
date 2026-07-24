@@ -54,7 +54,7 @@
     } _interpose_##_replacee                                                      \
     __attribute__((section("__DATA,__interpose"), aligned(sizeof(void *)))) = {  \
         (const void *)&(_replacement), (const void *)&(_replacee)                \
-    }
+    };
 
 @class WKWebViewConfiguration;
 @class WKUserContentController;

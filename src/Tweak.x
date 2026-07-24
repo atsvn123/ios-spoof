@@ -1,5 +1,6 @@
 #import "SCSpoofConfig.h"
 #import "SCDevicePresets.h"
+#import "fishhook.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -1028,47 +1029,72 @@ static BOOL sc_is_jb_path(NSString *p) {
     return NO;
 }
 
-// ── DYLD_INTERPOSE replacements ──────────────────────────────────────────────
-// No orig_* pointers needed: DYLD_INTERPOSE does NOT patch the GOT inside our
-// own dylib, so calling access/stat/open/… directly from sc_* goes straight to
-// libsystem — no trampoline, no recursion, no prologue modification.
+// ── fishhook replacements — GOT rewrite, no prologue modification ────────────
+//
+// fishhook overwrites GOT/PLT pointer slots in each image's __DATA segment.
+// Unlike MSHookFunction, it does NOT patch the function prologue bytes inside
+// libsystem — so build-info prologue scanners see original bytes.
+//
+// .roothidepatch suffix is blocked UNCONDITIONALLY (before sc_c_hide_jb gate)
+// because build-info scans TweakInject/*.roothidepatch in __mod_init_func,
+// before UIApplicationMain fires (sc_c_hide_jb is still NO at that point).
+//
+// orig_* pointers are filled in by rebind_symbols() in %ctor.
+// They are initialised to the real function as fallback so hooks are safe
+// even before rebind_symbols runs (shouldn't happen, but defensive).
 
+// Returns YES if path ends with ".roothidepatch" — unconditional early block.
+static BOOL sc_is_roothidepatch(const char *path) {
+    if (!path) return NO;
+    size_t len = strlen(path);
+    static const char kSuffix[] = ".roothidepatch";
+    const size_t kSuffixLen = sizeof(kSuffix) - 1;
+    if (len < kSuffixLen) return NO;
+    return strcmp(path + len - kSuffixLen, kSuffix) == 0;
+}
+
+static int (*orig_access)(const char *, int) = NULL;
 static int sc_access(const char *path, int mode) {
-    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+    if (path && (sc_is_roothidepatch(path) ||
+                 (atomic_load(&sc_c_hide_jb) && sc_is_jb_path_c(path)))) {
         errno = ENOENT; return -1;
     }
-    return access(path, mode);
+    return orig_access ? orig_access(path, mode) : access(path, mode);
 }
-DYLD_INTERPOSE(sc_access, access)
 
+static int (*orig_stat)(const char *, struct stat *) = NULL;
 static int sc_stat(const char *path, struct stat *buf) {
-    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+    if (path && (sc_is_roothidepatch(path) ||
+                 (atomic_load(&sc_c_hide_jb) && sc_is_jb_path_c(path)))) {
         errno = ENOENT; return -1;
     }
-    return stat(path, buf);
+    return orig_stat ? orig_stat(path, buf) : stat(path, buf);
 }
-DYLD_INTERPOSE(sc_stat, stat)
 
+static int (*orig_lstat)(const char *, struct stat *) = NULL;
 static int sc_lstat(const char *path, struct stat *buf) {
-    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+    if (path && (sc_is_roothidepatch(path) ||
+                 (atomic_load(&sc_c_hide_jb) && sc_is_jb_path_c(path)))) {
         errno = ENOENT; return -1;
     }
-    return lstat(path, buf);
+    return orig_lstat ? orig_lstat(path, buf) : lstat(path, buf);
 }
-DYLD_INTERPOSE(sc_lstat, lstat)
 
+// open() is variadic — fishhook patches GOT entries that are NOT variadic-
+// aware. We store a non-variadic pointer to open and reconstruct the mode arg.
+static int (*orig_open)(const char *, int, ...) = NULL;
 static int sc_open(const char *path, int flags, ...) {
     mode_t mode = 0;
     if (flags & O_CREAT) {
         va_list ap; va_start(ap, flags);
         mode = va_arg(ap, int); va_end(ap);
     }
-    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) {
+    if (path && (sc_is_roothidepatch(path) ||
+                 (atomic_load(&sc_c_hide_jb) && sc_is_jb_path_c(path)))) {
         errno = ENOENT; return -1;
     }
-    return open(path, flags, mode);
+    return orig_open ? orig_open(path, flags, mode) : open(path, flags, mode);
 }
-DYLD_INTERPOSE(sc_open, open)
 
 // Hook canOpenURL cho scheme cydia://, sileo://
 %hook UIApplication
@@ -1125,12 +1151,13 @@ static char *sc_getenv(const char *name) {
 }
 DYLD_INTERPOSE(sc_getenv, getenv)
 
-// fopen — hide jailbreak files
+// fopen — hide jailbreak files (fishhook GOT rewrite)
+static FILE *(*orig_fopen)(const char *, const char *) = NULL;
 static FILE *sc_fopen(const char *path, const char *mode) {
-    if (atomic_load(&sc_c_hide_jb) && path && sc_is_jb_path_c(path)) return NULL;
-    return fopen(path, mode);
+    if (path && (sc_is_roothidepatch(path) ||
+                 (atomic_load(&sc_c_hide_jb) && sc_is_jb_path_c(path)))) return NULL;
+    return orig_fopen ? orig_fopen(path, mode) : fopen(path, mode);
 }
-DYLD_INTERPOSE(sc_fopen, fopen)
 
 // dlopen — block jailbreak dylibs (pure C, no ObjC)
 static void *sc_dlopen(const char *path, int mode) {
@@ -1950,12 +1977,24 @@ static void SCInstallMobileGestaltHooks(void) {
         SCInstallMobileGestaltHooks();
 
         // ----------------------------------------------------------------
-        //  JB hiding C hooks moved to DYLD_INTERPOSE (file scope, above).
-        //  access / stat / lstat / open / fopen / getenv / dlopen / fork /
-        //  posix_spawn / readlink / realpath — NO MSHookFunction here.
-        //  DYLD_INTERPOSE patches GOT entries without touching function
-        //  prologues, so build-info prologue scanner sees clean bytes.
+        //  Filesystem JB-hiding — fishhook GOT rewrite (no prologue patch).
+        //  rebind_symbols() overwrites __DATA GOT slots in every loaded image.
+        //  The prologue bytes in libsystem are untouched → prologue scanners
+        //  (like build-info.framework) see clean, unmodified bytes.
+        //
+        //  rebind_symbols also registers _dyld_register_func_for_add_image so
+        //  any framework loaded AFTER this point also gets the rebinding.
         // ----------------------------------------------------------------
+        {
+            struct rebinding fs_hooks[] = {
+                { "access", (void *)sc_access, (void **)&orig_access },
+                { "stat",   (void *)sc_stat,   (void **)&orig_stat   },
+                { "lstat",  (void *)sc_lstat,  (void **)&orig_lstat  },
+                { "open",   (void *)sc_open,   (void **)&orig_open   },
+                { "fopen",  (void *)sc_fopen,  (void **)&orig_fopen  },
+            };
+            rebind_symbols(fs_hooks, sizeof(fs_hooks) / sizeof(fs_hooks[0]));
+        }
 
         // proc_pidpath / proc_name still need MSHookFunction (not exported
         // symbols — looked up via dlsym at runtime, can't use DYLD_INTERPOSE)

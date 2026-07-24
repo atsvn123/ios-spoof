@@ -10,6 +10,7 @@ iOSSpoof_FILES = \
 	src/SCSpoofConfig.m \
 	src/SCDevicePresets.m \
 	src/SCProxyManager.m \
+	src/fishhook.c \
 	src/Tweak.x \
 	src/SCNetworkHooks.x \
 	src/SCGeoHooks.x

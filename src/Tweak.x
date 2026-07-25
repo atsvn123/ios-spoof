@@ -1188,16 +1188,22 @@ static pid_t sc_vfork(void) {
 //   confirm a writable shell exists on rootfs. When hiding is active we
 //   refuse to spawn anything; when hiding is off we forward to the real
 //   impl so legitimate callers (rare inside target bundles) keep working.
+//   NOTE: system() is marked __unavailable on iOS SDK — we can't reference
+//   it as a fallback. orig_system is always set before the hook can fire
+//   (fishhook installs the GOT rebind in the same call), so the fallback
+//   branch is dead. If orig_system is NULL for any reason, fail closed.
 static FILE *(*orig_popen)(const char *, const char *) = NULL;
 static FILE *sc_popen(const char *cmd, const char *mode) {
     if (atomic_load(&sc_c_hide_jb)) { errno = ENOENT; return NULL; }
-    return orig_popen ? orig_popen(cmd, mode) : popen(cmd, mode);
+    if (!orig_popen) { errno = ENOSYS; return NULL; }
+    return orig_popen(cmd, mode);
 }
 
 static int (*orig_system)(const char *) = NULL;
 static int sc_system(const char *cmd) {
     if (atomic_load(&sc_c_hide_jb)) { errno = ENOENT; return -1; }
-    return orig_system ? orig_system(cmd) : system(cmd);
+    if (!orig_system) { errno = ENOSYS; return -1; }
+    return orig_system(cmd);
 }
 
 // Pure-C basename check for directory entries (readdir hiding).

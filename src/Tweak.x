@@ -1183,6 +1183,23 @@ static pid_t sc_vfork(void) {
     return orig_vfork ? orig_vfork() : vfork();
 }
 
+// popen / system — objection hooks both. Some JB detectors run
+//   popen("/bin/sh", "r") / system("uname -a") and inspect the result to
+//   confirm a writable shell exists on rootfs. When hiding is active we
+//   refuse to spawn anything; when hiding is off we forward to the real
+//   impl so legitimate callers (rare inside target bundles) keep working.
+static FILE *(*orig_popen)(const char *, const char *) = NULL;
+static FILE *sc_popen(const char *cmd, const char *mode) {
+    if (atomic_load(&sc_c_hide_jb)) { errno = ENOENT; return NULL; }
+    return orig_popen ? orig_popen(cmd, mode) : popen(cmd, mode);
+}
+
+static int (*orig_system)(const char *) = NULL;
+static int sc_system(const char *cmd) {
+    if (atomic_load(&sc_c_hide_jb)) { errno = ENOENT; return -1; }
+    return orig_system ? orig_system(cmd) : system(cmd);
+}
+
 // Pure-C basename check for directory entries (readdir hiding).
 // d_name is a leaf name (e.g. "Cydia.app", ".bootstrapped"), not a full path,
 // so the path lists above don't apply — match against known JB leaf names.
@@ -2084,6 +2101,8 @@ static void SCInstallMobileGestaltHooks(void) {
                 { "vfork",        (void *)sc_vfork,        (void **)&orig_vfork        },
                 { "opendir",      (void *)sc_opendir,      (void **)&orig_opendir      },
                 { "readdir",      (void *)sc_readdir,      (void **)&orig_readdir      },
+                { "popen",        (void *)sc_popen,        (void **)&orig_popen        },
+                { "system",       (void *)sc_system,       (void **)&orig_system       },
             };
             rebind_symbols(all_hooks, sizeof(all_hooks) / sizeof(all_hooks[0]));
         }

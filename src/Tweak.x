@@ -1109,12 +1109,23 @@ static int sc_open(const char *path, int flags, ...) {
 %end
 
 // getenv — two-tier design:
-// Tier 1: DYLD_INSERT_LIBRARIES → "" to prevent NULL dereference in __mod_init_func
+// Tier 1: DYLD_INSERT_LIBRARIES → hidden after UIApplicationMain fires.
+//   CRITICAL: Must NOT return "" during __mod_init_func phase (before sc_hooks_ready).
+//   build-info.framework calls getenv("DYLD_INSERT_LIBRARIES") in its __mod_init_func
+//   and parses the result as a colon-separated path list. If we return "":
+//     strtok("", ":") → NULL → caller dereferences NULL+0x80 → SIGSEGV.
+//   Returning NULL before hooks_ready tells callers "no injection" → they skip parsing.
+//   After UIApplicationMain (sc_hooks_ready=YES), return "" to suppress any late checks.
 // Tier 2: all other JB env vars blocked when sc_c_hide_jb=YES
 static char *(*orig_getenv)(const char *) = NULL;
 static char *sc_getenv(const char *name) {
     if (!name) return (orig_getenv ? orig_getenv(name) : getenv(name));
-    if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0) return (char *)"";
+    if (strcmp(name, "DYLD_INSERT_LIBRARIES") == 0) {
+        // Before UIApplicationMain: return NULL so __mod_init_func callers skip parsing.
+        // After UIApplicationMain: return "" to suppress late-phase JB library checks.
+        if (!atomic_load(&sc_hooks_ready)) return NULL;
+        return (char *)"";
+    }
     if (atomic_load(&sc_c_hide_jb)) {
         if (strcmp(name, "_MSSafeMode") == 0 ||
             strcmp(name, "SUBSTRATE_HOME") == 0 ||

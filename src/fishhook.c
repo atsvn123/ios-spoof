@@ -32,6 +32,24 @@ typedef struct nlist             nlist_t;
 #define SEG_DATA_CONST  "__DATA_CONST"
 #endif
 
+// Skip JB-injected dylibs: their __DATA_CONST pages are r-- COW and writing
+// to them causes SIGBUS (KERN_PROTECTION_FAILURE). We only need to patch
+// GOT entries in the app binary and system frameworks, not in JB dylibs.
+static int sc_is_jb_image_path(const char *path) {
+    if (!path) return 0;
+    if (strstr(path, ".jbroot"))            return 1;
+    if (strstr(path, "/TweakInject/"))      return 1;
+    if (strstr(path, "/DynamicPatches/"))   return 1;
+    if (strstr(path, "systemhook"))         return 1;
+    if (strstr(path, "/var/jb/"))           return 1;
+    if (strstr(path, "/private/preboot/"))  return 1;
+    if (strstr(path, "roothide"))           return 1;
+    if (strstr(path, "ellekit"))            return 1;
+    if (strstr(path, "libellekit"))         return 1;
+    if (strstr(path, "libinjector"))        return 1;
+    return 0;
+}
+
 struct rebindings_entry {
     struct rebinding *rebindings;
     size_t rebindings_nel;
@@ -97,6 +115,9 @@ static void rebind_symbols_for_image(struct rebindings_entry *rebindings,
                                       intptr_t slide) {
     Dl_info info;
     if (dladdr(header, &info) == 0) return;
+
+    // Skip JB dylibs — their __DATA_CONST is r-- and writing causes SIGBUS.
+    if (sc_is_jb_image_path(info.dli_fname)) return;
 
     segment_command_t *cur_seg_cmd;
     segment_command_t *linkedit_segment = NULL;

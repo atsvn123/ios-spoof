@@ -549,6 +549,22 @@ static NSArray<NSDictionary *> *SCKernelProfiles(void) {
             @"namecacheBackend": @NO,
             @"mutationAllowed": @NO,
             @"notes": @"Profile for iPhone X D22AP build 20H364. VFS test fixture enabled. No production vnode hiding."
+        },
+        @{
+            @"profileID": @"iphone10-3-d22ap-20h392-28e24ce2",
+            @"profileVersion": @1,
+            @"productType": @"iPhone10,3",
+            @"hardwareModel": @"D22AP",
+            @"soc": @"T8015",
+            @"osBuild": @"20H392",
+            @"darwinRelease": @"22.6.0",
+            @"kernelUUID": @"28E24CE2-BA1C-38B1-AC56-C0BE08A077BC",
+            @"providerFamily": @"libkrw-dopamine",
+            @"minimumCapabilityLevel": @"L4",
+            @"vfsBackend": @YES,
+            @"namecacheBackend": @NO,
+            @"mutationAllowed": @YES,
+            @"notes": @"Profile for iPhone X D22AP build 20H392 (iOS 16.7.11). Same kernel UUID as 20H364. VFS + hide-jb enabled."
         }
     ];
 }

@@ -31,6 +31,7 @@
 #import <substrate.h>
 #include <stdatomic.h>  // atomic_load / atomic_store / _Atomic
 #import <IOKit/IOKitLib.h>
+#import <dirent.h>
 
 // ============================================================================
 //  fishhook — rewrite GOT entries at runtime, inside the shouldInject gate.
@@ -1170,6 +1171,81 @@ static pid_t sc_fork(void) {
     return orig_fork ? orig_fork() : fork();
 }
 
+// vfork — same JB probe as fork (objection lists this as a TODO vector).
+// NOTE: vfork has strict semantics (the child must not return from the
+// caller of vfork before exec/exit). We never actually spawn a child here —
+// when hiding is active we return -1/ENOSYS directly; otherwise we forward
+// to the real vfork so genuine callers keep working. The forward is a plain
+// tail call from the same frame, preserving vfork's stack contract.
+static pid_t (*orig_vfork)(void) = NULL;
+static pid_t sc_vfork(void) {
+    if (atomic_load(&sc_c_hide_jb)) { errno = ENOSYS; return -1; }
+    return orig_vfork ? orig_vfork() : vfork();
+}
+
+// Pure-C basename check for directory entries (readdir hiding).
+// d_name is a leaf name (e.g. "Cydia.app", ".bootstrapped"), not a full path,
+// so the path lists above don't apply — match against known JB leaf names.
+static const char * const sc_jb_dirent[] = {
+    "Cydia.app",
+    "Sileo.app",
+    "Zebra.app",
+    "Installer.app",
+    "Filza.app",
+    "NewTerm.app",
+    "MTerminal.app",
+    "MobileSubstrate.dylib",
+    "TweakInject",
+    "substitute-loader.dylib",
+    "substitute.dylib",
+    "libellekit.dylib",
+    "ellekit",
+    ".bootstrapped",
+    ".installed_unc0ver",
+    ".checkra1n",
+    "checkra1n.dmg",
+    "pspawn-helper",
+    "prebootHelper",
+    NULL
+};
+static BOOL sc_is_jb_dirent_c(const char *name) {
+    if (!name || name[0] == '\0') return NO;
+    for (int i = 0; sc_jb_dirent[i]; i++) {
+        if (strcmp(name, sc_jb_dirent[i]) == 0) return YES;
+    }
+    // ".roothidepatch" suffix — always hidden
+    size_t n = strlen(name);
+    const char *sfx = ".roothidepatch";
+    size_t sl = strlen(sfx);
+    if (n >= sl && strcmp(name + (n - sl), sfx) == 0) return YES;
+    return NO;
+}
+
+// opendir — takes a path, so block JB directories directly (like open/fopen).
+static DIR *(*orig_opendir)(const char *) = NULL;
+static DIR *sc_opendir(const char *path) {
+    if (path && (sc_is_roothidepatch(path) ||
+                 (atomic_load(&sc_c_hide_jb) && sc_is_jb_path_c(path)))) {
+        errno = ENOENT;
+        return NULL;
+    }
+    return orig_opendir ? orig_opendir(path) : opendir(path);
+}
+
+// readdir — takes a DIR* (not a path), so we can't block up front. Instead
+// loop over the real entries and skip any whose leaf name matches a JB name.
+static struct dirent *(*orig_readdir)(DIR *) = NULL;
+static struct dirent *sc_readdir(DIR *dirp) {
+    struct dirent *ent;
+    for (;;) {
+        ent = orig_readdir ? orig_readdir(dirp) : readdir(dirp);
+        if (!ent) return NULL;
+        if (atomic_load(&sc_c_hide_jb) && sc_is_jb_dirent_c(ent->d_name))
+            continue;   // hide this entry, advance to the next
+        return ent;
+    }
+}
+
 // task_for_pid — debugger/JB detection
 static kern_return_t (*orig_task_for_pid)(mach_port_name_t, int, mach_port_name_t *) = NULL;
 static kern_return_t sc_task_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *t) {
@@ -2005,6 +2081,9 @@ static void SCInstallMobileGestaltHooks(void) {
                 { "readlink",     (void *)sc_readlink,     (void **)&orig_readlink     },
                 { "realpath",     (void *)sc_realpath,     (void **)&orig_realpath     },
                 { "posix_spawn",  (void *)sc_posix_spawn,  (void **)&orig_posix_spawn  },
+                { "vfork",        (void *)sc_vfork,        (void **)&orig_vfork        },
+                { "opendir",      (void *)sc_opendir,      (void **)&orig_opendir      },
+                { "readdir",      (void *)sc_readdir,      (void **)&orig_readdir      },
             };
             rebind_symbols(all_hooks, sizeof(all_hooks) / sizeof(all_hooks[0]));
         }
